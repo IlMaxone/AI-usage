@@ -1,0 +1,4 @@
+﻿"rilevazione_locale","fuso_orario","residuo_5h_percento","usato_5h_percento","reset_5h_locale","residuo_settimanale_percento","usato_settimanale_percento","reset_settimanale_locale","immagine","sha256","confidenza_ocr_percento","origine_data","modifica_file_utc"
+"2026-01-05T09:15:00","Europe/Rome","80","20","2026-01-05T13:00:00","92","8","2026-01-11","demo-01.png","1111111111111111111111111111111111111111111111111111111111111111","99","demo","2026-01-05T08:15:00.000Z"
+"2026-01-05T12:00:00","Europe/Rome","45","55","2026-01-05T13:00:00","85","15","2026-01-11","demo-02.png","2222222222222222222222222222222222222222222222222222222222222222","98","demo","2026-01-05T11:00:00.000Z"
+"2026-01-06T16:30:00","Europe/Rome","30","70","2026-01-06T20:00:00","75","25","2026-01-11","demo-03.png","3333333333333333333333333333333333333333333333333333333333333333","97","demo","2026-01-06T15:30:00.000Z"

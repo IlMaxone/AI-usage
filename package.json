@@ -1,0 +1,17 @@
+{
+  "name": "ai-usage-local-analytics",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "analyze": "node ./scripts/analyze.mjs",
+    "analyze:offline": "node ./scripts/analyze.mjs --offline",
+    "analyze:dry-run": "node ./scripts/analyze.mjs --dry-run",
+    "verify:processed": "node ./scripts/analyze.mjs --verify-processed",
+    "demo:build": "node ./scripts/analyze.mjs --project demo --offline"
+  },
+  "dependencies": {
+    "sharp": "0.35.4",
+    "tesseract.js": "7.0.0"
+  }
+}

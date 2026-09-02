@@ -1,0 +1,2 @@
+﻿"data_tasso_bce","scaricato_utc","valuta_base","valuta_quotata","usd_per_eur","eur_per_usd","fonte","sha256","file_grezzo","snapshot_id","nota"
+"2026-01-05","2026-01-05T08:00:02.000Z","EUR","USD","1.1","0.9090909091","https://example.invalid/demo-exchange-rate","cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","raw/demo-exchange-rate.xml","exchange-rate-demo-2026-01-05","Tasso inventato per la dashboard dimostrativa."

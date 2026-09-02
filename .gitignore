@@ -1,0 +1,10 @@
+node_modules/
+ocr-cache/
+*.traineddata
+
+.env
+.env.*
+
+projects/*
+!projects/demo/
+!projects/demo/**
