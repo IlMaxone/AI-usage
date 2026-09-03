@@ -16,6 +16,8 @@ AI-usage deve offrire un processo locale, trasparente e verificabile per:
 - leggere percentuali e date di reset dagli screenshot;
 - conservare uno storico append-only delle rilevazioni accettate;
 - registrare prezzi, limiti e cambi insieme alla data e all'ora del download;
+- registrare separatamente gli eventuali acquisti di crediti extra dichiarati
+  dall'utente;
 - distinguere sempre i dati osservati dalle elaborazioni e dalle ipotesi;
 - produrre report Markdown, CSV e una dashboard HTML statica;
 - isolare completamente i dati privati di ogni progetto analizzato.
@@ -77,7 +79,9 @@ projects/<nome>/
 ├── to-process-img/              screenshot in attesa
 ├── processed-images/            screenshot già elaborati
 ├── historical-data/
-│   └── usage-snapshots.jsonl    rilevazioni append-only
+│   ├── usage-snapshots.jsonl    rilevazioni append-only
+│   ├── extra-credit-purchases.jsonl
+│   └── billing-calibrations.jsonl
 ├── internet-data/
 │   ├── pricing-snapshots.jsonl  prezzi e limiti con timestamp
 │   ├── exchange-rate-snapshots.jsonl
@@ -120,7 +124,7 @@ Con lo script PowerShell:
 Oppure direttamente con npm:
 
 ```powershell
-npm run analyze -- --project GFP
+npm run analyze -- GFP
 ```
 
 Modalità disponibili:
@@ -129,16 +133,40 @@ Modalità disponibili:
 .\run-analysis.ps1 GFP -DryRun
 .\run-analysis.ps1 GFP -Offline
 .\run-analysis.ps1 GFP -VerifyProcessed
-npm run verify:processed -- --project GFP
+npm run verify:processed -- GFP
+npm run credits:add -- GFP 500 20
 npm run demo:build
 ```
+
+I comandi npm usano argomenti posizionali dopo `--` per evitare che npm 11 su
+Windows interpreti opzioni personalizzate come configurazioni proprie.
 
 - `DryRun` legge e valida senza scrivere o spostare file.
 - `Offline` riutilizza l'ultimo snapshot Internet disponibile.
 - `VerifyProcessed` riesegue il doppio controllo OCR sulle immagini archiviate
   e confronta i risultati con lo storico, senza scaricare fonti o modificare i
   dati.
+- `credits:add` registra un acquisto di crediti extra dichiarato dall'utente e
+  rigenera i report senza avviare l'OCR né accedere a Internet.
 - `demo:build` rigenera i report dimostrativi con dati inventati.
+
+Lo stesso acquisto può essere registrato direttamente dallo script PowerShell:
+
+```powershell
+.\run-analysis.ps1 GFP -RecordExtraCredits -Credits 500 -PaidEur 20
+```
+
+La data e l'ora dell'acquisto vengono registrate automaticamente. Per indicare
+il momento esatto, aggiungerlo come quarto argomento in formato ISO 8601:
+
+```powershell
+npm run credits:add -- GFP 500 20 2026-09-02T18:30:00+02:00
+```
+
+Con PowerShell lo stesso valore può essere passato tramite `-PurchasedAt`.
+
+Gli acquisti sono append-only. Ripetere lo stesso comando con lo stesso
+timestamp, numero di crediti e importo non crea un duplicato.
 
 ## Controllo OCR e fallback
 
@@ -155,7 +183,29 @@ Se i controlli non concordano:
 - la dashboard non viene rigenerata;
 - viene richiesta una verifica manuale.
 
-## Fonti Internet e stime
+## Calibrazione sulla fatturazione
+
+Il metodo principale usa osservazioni di fatturazione dichiarate dall'utente.
+Ogni progetto conserva localmente percentuale del piano osservata, durate,
+importi fatturati, modalità di reasoning e rapporto tra euro e crediti. I dati
+reali rimangono nella cartella progetto ignorata da Git; il progetto `demo`
+mostra la stessa struttura usando esclusivamente valori inventati.
+
+Da queste osservazioni il motore ricava, senza salvare risultati arbitrari come
+costanti, il valore equivalente del 100%, i crediti corrispondenti e la durata
+equivalente con il modello e reasoning scelti come pilota.
+
+Per ogni screenshot la percentuale usata viene applicata a questa base. I
+crediti e il valore in euro calibrati sono quindi i numeri principali della
+dashboard. Gli equivalenti token partono dai crediti calibrati, ma richiedono
+anche i rapporti crediti-per-milione scaricati dalla fonte online; input, cache
+e output restano scenari alternativi e non devono essere sommati.
+
+Osservazioni, dati derivati e listini online sono mostrati separatamente. Una
+nuova calibrazione deve essere aggiunta allo storico soltanto dopo una verifica
+umana dei dati di fatturazione.
+
+## Fonti Internet e stime secondarie
 
 Quando una nuova immagine supera la validazione, il processo online acquisisce:
 
@@ -167,11 +217,19 @@ Per ogni fonte vengono conservati URL, data e ora del download e hash del
 contenuto. I dati Internet restano separati dallo storico estratto dagli
 screenshot.
 
-Il settimanale conserva percentuale e reset, ma non viene convertito in token
-finché una fonte non pubblica una capacità numerica affidabile. Gli equivalenti
-input, cache e output sono scenari alternativi e non devono essere sommati. I
-costi in dollari ed euro sono stime comparative ai prezzi API, non misurazioni
-del consumo reale di Codex o addebiti dell'abbonamento ChatGPT.
+Il precedente metodo basato sugli intervalli pubblicati online resta nel report
+come confronto secondario. I relativi costi in dollari ed euro non sono
+misurazioni del consumo reale di Codex né addebiti dell'abbonamento ChatGPT.
+
+Il settimanale conserva percentuale e reset, ma non viene convertito in token o
+costo finché una fonte non pubblica una capacità numerica affidabile.
+
+I crediti extra e l'importo pagato sono invece dati dichiarati manualmente e
+vengono mostrati in una sezione distinta della dashboard. Non vengono sommati ai
+crediti del piano prima di essere identificati separatamente. Per regola di
+progetto, ogni credito acquistato viene considerato già speso: entra quindi nel
+totale dei crediti e dei token equivalenti consumati, con residuo assunto pari a
+zero.
 
 ## Dashboard locale
 

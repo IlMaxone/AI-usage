@@ -4,7 +4,11 @@ param(
     [string]$Project,
     [switch]$DryRun,
     [switch]$Offline,
-    [switch]$VerifyProcessed
+    [switch]$VerifyProcessed,
+    [switch]$RecordExtraCredits,
+    [long]$Credits,
+    [decimal]$PaidEur,
+    [string]$PurchasedAt
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +38,25 @@ try {
     }
 
     $analysisArguments = @('--project', $Project)
+    if ($RecordExtraCredits) {
+        if (-not $PSBoundParameters.ContainsKey('Credits') -or $Credits -le 0) {
+            throw 'Con -RecordExtraCredits indicare -Credits con un intero positivo.'
+        }
+        if (-not $PSBoundParameters.ContainsKey('PaidEur') -or $PaidEur -le 0) {
+            throw 'Con -RecordExtraCredits indicare -PaidEur con un importo positivo.'
+        }
+        $analysisArguments += '--record-extra-credits'
+        $analysisArguments += @('--credits', $Credits.ToString([Globalization.CultureInfo]::InvariantCulture))
+        $analysisArguments += @('--paid-eur', $PaidEur.ToString([Globalization.CultureInfo]::InvariantCulture))
+        if ($PurchasedAt) { $analysisArguments += @('--purchased-at', $PurchasedAt) }
+    }
+    elseif (
+        $PSBoundParameters.ContainsKey('Credits') -or
+        $PSBoundParameters.ContainsKey('PaidEur') -or
+        $PSBoundParameters.ContainsKey('PurchasedAt')
+    ) {
+        throw '-Credits, -PaidEur e -PurchasedAt richiedono -RecordExtraCredits.'
+    }
     if ($DryRun) { $analysisArguments += '--dry-run' }
     if ($Offline) { $analysisArguments += '--offline' }
     if ($VerifyProcessed) { $analysisArguments += '--verify-processed' }

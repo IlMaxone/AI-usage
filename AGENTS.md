@@ -18,6 +18,15 @@ applicativi esterni.
   restare tracciabili.
 - Non modificare o eliminare `ai-usage-analytics.md`.
 - Separare sempre rilevazioni locali, dati scaricati e stime derivate.
+- Conservare gli acquisti di crediti extra come dichiarazioni utente append-only,
+  distinti sia dai dati OCR sia dalle stime del piano. Considerarli interamente
+  spesi, con residuo assunto pari a zero, come regola esplicita di progetto.
+- Conservare le osservazioni di fatturazione e le calibrazioni come dati
+  append-only dichiarati dall'utente. Calcolare i risultati derivati nel motore
+  e non confonderli con importi direttamente fatturati.
+- Usare la calibrazione di fatturazione come metodo primario quando disponibile;
+  mantenere le stime basate unicamente sui listini online come confronto
+  secondario.
 
 ## Regole operative
 
@@ -29,7 +38,7 @@ applicativi esterni.
   validazione.
 - Conservare URL, timestamp e hash delle fonti esterne utilizzate.
 - Ogni modifica al parser OCR deve superare
-  `npm run verify:processed -- --project <nome>` su almeno un progetto locale
+  `npm run verify:processed -- <nome>` su almeno un progetto locale
   reale.
 - Eseguire almeno il controllo sintattico degli script modificati e una prova
   offline o dry-run appropriata.

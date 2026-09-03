@@ -6,40 +6,120 @@ import sharp from 'sharp';
 import { createWorker, PSM } from 'tesseract.js';
 import {
   estimateUsage,
+  estimateCalibratedUsage,
+  aggregateCalibratedTotals,
+  aggregateExtraCreditPurchases,
+  aggregatePrimaryConsumption,
   aggregateTotals,
+  renderBillingCalibrationCsv,
+  renderBillingEstimatesCsv,
   renderDashboard,
   renderEstimatesCsv,
   renderExchangeRatesCsv,
+  renderExtraCreditPurchasesCsv,
   renderInternetCsv,
   renderTotalsCsv,
   renderUsageCsv,
+  selectBillingCalibration,
   selectExchangeRate,
 } from './report-renderers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const rawArgs = process.argv.slice(2);
+const positionalArgs = [];
 let projectName = null;
 let dryRun = false;
 let offline = false;
 let verifyProcessed = false;
+let recordExtraCredits = false;
+let purchasedCredits = null;
+let paidEur = null;
+let purchasedAt = null;
 
 for (let index = 0; index < rawArgs.length; index += 1) {
   const argument = rawArgs[index];
   if (argument === '--dry-run') dryRun = true;
   else if (argument === '--offline') offline = true;
   else if (argument === '--verify-processed') verifyProcessed = true;
-  else if (argument === '--project') {
+  else if (argument === '--record-extra-credits') recordExtraCredits = true;
+  else if (argument === '--credits') {
+    purchasedCredits = rawArgs[index + 1];
+    index += 1;
+  } else if (argument.startsWith('--credits=')) {
+    purchasedCredits = argument.slice('--credits='.length);
+  } else if (argument === '--paid-eur') {
+    paidEur = rawArgs[index + 1];
+    index += 1;
+  } else if (argument.startsWith('--paid-eur=')) {
+    paidEur = argument.slice('--paid-eur='.length);
+  } else if (argument === '--purchased-at') {
+    purchasedAt = rawArgs[index + 1];
+    index += 1;
+  } else if (argument.startsWith('--purchased-at=')) {
+    purchasedAt = argument.slice('--purchased-at='.length);
+  } else if (argument === '--project') {
     projectName = rawArgs[index + 1];
     index += 1;
   } else if (argument.startsWith('--project=')) {
     projectName = argument.slice('--project='.length);
+  } else if (!argument.startsWith('-')) {
+    positionalArgs.push(argument);
   } else {
     throw new Error('Argomento non riconosciuto: ' + argument);
   }
 }
 
+if (recordExtraCredits && positionalArgs.length > 0) {
+  if (
+    projectName !== null || purchasedCredits !== null ||
+    paidEur !== null || purchasedAt !== null
+  ) {
+    throw new Error('Non combinare argomenti posizionali e opzioni nominate per i crediti extra.');
+  }
+  if (positionalArgs.length < 3 || positionalArgs.length > 4) {
+    throw new Error('Uso: <progetto> <crediti> <importo-eur> [data-ISO-8601].');
+  }
+  projectName = positionalArgs[0];
+  purchasedCredits = positionalArgs[1];
+  paidEur = positionalArgs[2];
+  purchasedAt = positionalArgs[3] ?? null;
+} else if (!recordExtraCredits && positionalArgs.length === 1 && projectName === null) {
+  projectName = positionalArgs[0];
+} else if (positionalArgs.length > 0) {
+  throw new Error('Argomenti posizionali non validi: ' + positionalArgs.join(' '));
+}
+
 if (!projectName || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(projectName)) {
-  throw new Error('Specificare un progetto valido con --project <nome>.');
+  throw new Error('Specificare un progetto valido come primo argomento o con --project <nome>.');
+}
+
+if (recordExtraCredits) {
+  if (dryRun || offline || verifyProcessed) {
+    throw new Error('--record-extra-credits non puo essere combinato con modalita di analisi.');
+  }
+  if (
+    !/^\d+$/.test(purchasedCredits ?? '') ||
+    !Number.isSafeInteger(Number(purchasedCredits)) ||
+    Number(purchasedCredits) <= 0
+  ) {
+    throw new Error('Specificare un numero intero positivo con --credits <quantita>.');
+  }
+  if (
+    !/^\d+(?:[.,]\d{1,2})?$/.test(paidEur ?? '') ||
+    !Number.isFinite(Number(String(paidEur).replace(',', '.'))) ||
+    Number(String(paidEur).replace(',', '.')) <= 0
+  ) {
+    throw new Error('Specificare un importo EUR positivo, con al massimo due decimali, usando --paid-eur <importo>.');
+  }
+  if (purchasedAt !== null) {
+    const isoWithTimeZone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+    const hasExplicitTimeZone = isoWithTimeZone.test(purchasedAt);
+    if (!hasExplicitTimeZone || Number.isNaN(Date.parse(purchasedAt))) {
+      throw new Error('--purchased-at deve essere una data ISO 8601 completa di fuso orario.');
+    }
+  }
+} else if (purchasedCredits !== null || paidEur !== null || purchasedAt !== null) {
+  throw new Error('--credits, --paid-eur e --purchased-at richiedono --record-extra-credits.');
 }
 
 const projectsDir = path.join(root, 'projects');
@@ -56,6 +136,8 @@ const reportsDir = path.join(projectDir, 'reports');
 const csvReportsDir = path.join(reportsDir, 'csv');
 const ocrCacheDir = path.join(root, 'ocr-cache');
 const usageDataFile = path.join(historicalDir, 'usage-snapshots.jsonl');
+const extraCreditDataFile = path.join(historicalDir, 'extra-credit-purchases.jsonl');
+const billingCalibrationDataFile = path.join(historicalDir, 'billing-calibrations.jsonl');
 const pricingDataFile = path.join(internetDir, 'pricing-snapshots.jsonl');
 const exchangeRateDataFile = path.join(internetDir, 'exchange-rate-snapshots.jsonl');
 const timeZone = 'Europe/Rome';
@@ -122,6 +204,40 @@ async function readJsonLines(file) {
 
 async function appendJsonLine(file, value) {
   await fs.appendFile(file, JSON.stringify(value) + '\n', 'utf8');
+}
+
+async function recordExtraCreditPurchase() {
+  const credits = Number(purchasedCredits);
+  const normalizedPaidEur = Number(String(paidEur).replace(',', '.'));
+  const purchaseInstant = purchasedAt ? new Date(purchasedAt) : new Date();
+  const purchasedAtIso = purchaseInstant.toISOString();
+  const fingerprint = sha256(Buffer.from([
+    purchasedAtIso,
+    credits,
+    normalizedPaidEur.toFixed(2),
+    'EUR',
+  ].join('|')));
+  const purchase = {
+    schemaVersion: 1,
+    id: 'extra-credit-' + fingerprint,
+    purchasedAt: purchasedAtIso,
+    recordedAt: new Date().toISOString(),
+    credits,
+    paidEur: normalizedPaidEur,
+    currency: 'EUR',
+    source: 'user-declared',
+  };
+  const existing = await readJsonLines(extraCreditDataFile);
+  if (existing.some((item) => item.id === purchase.id)) {
+    console.log('Acquisto extra gia registrato: ' + purchase.id + '.');
+    return false;
+  }
+  await appendJsonLine(extraCreditDataFile, purchase);
+  console.log(
+    'Registrato acquisto extra: ' + credits + ' crediti, EUR ' +
+    formatDecimal(normalizedPaidEur) + ', acquistati il ' + purchasedAtIso + '.',
+  );
+  return true;
 }
 
 async function atomicWrite(file, content) {
@@ -572,6 +688,15 @@ function usageSignature(usage) {
 
 async function recognizeUsageCandidates(worker, imagePath, imageBuffer, rectangle, capture, fullResult) {
   const candidates = [];
+  const failures = [];
+  const hasAgreement = () => {
+    const signatureCounts = new Map();
+    for (const candidate of candidates) {
+      const signature = usageSignature(candidate.usage);
+      signatureCounts.set(signature, (signatureCounts.get(signature) ?? 0) + 1);
+    }
+    return [...signatureCounts.values()].some((count) => count >= 2);
+  };
   const addCandidate = (name, result) => {
     try {
       candidates.push({
@@ -579,8 +704,8 @@ async function recognizeUsageCandidates(worker, imagePath, imageBuffer, rectangl
         usage: parseUsage(result.data.text, capture),
         confidence: Number(result.data.confidence.toFixed(2)),
       });
-    } catch {
-      // Il candidato non e strutturato abbastanza per essere confrontato.
+    } catch (error) {
+      failures.push({ name, reason: error.message });
     }
   };
 
@@ -599,10 +724,29 @@ async function recognizeUsageCandidates(worker, imagePath, imageBuffer, rectangl
       .toBuffer();
     const preparedResult = await worker.recognize(preparedPanel);
     addCandidate('left-panel-preprocessed', preparedResult);
+
+    if (!hasAgreement()) {
+      const largerPanel = await sharp(imageBuffer)
+        .extract(rectangle)
+        .resize({ width: rectangle.width * 4, kernel: sharp.kernel.lanczos3 })
+        .grayscale()
+        .normalize()
+        .sharpen()
+        .png()
+        .toBuffer();
+      const largerResult = await worker.recognize(largerPanel);
+      addCandidate('left-panel-preprocessed-4x', largerResult);
+    }
+
+    if (!hasAgreement()) {
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+      const sparseResult = await worker.recognize(preparedPanel);
+      addCandidate('left-panel-sparse-text', sparseResult);
+    }
   }
 
   addCandidate('full-image-fallback', fullResult);
-  return candidates;
+  return { candidates, failures };
 }
 
 async function recognizeImage(worker, imagePath, imageBuffer, imageName, imageHash) {
@@ -611,7 +755,7 @@ async function recognizeImage(worker, imagePath, imageBuffer, imageName, imageHa
   const fullResult = await worker.recognize(imagePath);
   const capture = parseCaptureTimestamp(fullResult.data.text, fileStat);
   const rectangle = usagePanelRectangle(imageBuffer);
-  const candidates = await recognizeUsageCandidates(
+  const { candidates, failures } = await recognizeUsageCandidates(
     worker,
     imagePath,
     imageBuffer,
@@ -628,9 +772,13 @@ async function recognizeImage(worker, imagePath, imageBuffer, imageName, imageHa
   const matchingCandidates = [...bySignature.values()]
     .sort((a, b) => b.length - a.length || b[0].confidence - a[0].confidence)[0] ?? [];
   if (matchingCandidates.length < 2) {
-    const summary = candidates.length === 0
-      ? 'nessun passaggio OCR valido'
-      : candidates.map((candidate) => candidate.name + '=' + usageSignature(candidate.usage)).join(', ');
+    const validSummary = candidates.map(
+      (candidate) => candidate.name + '=' + usageSignature(candidate.usage),
+    );
+    const invalidSummary = failures.map(
+      (failure) => failure.name + ' (' + failure.reason + ')',
+    );
+    const summary = [...validSummary, ...invalidSummary].join(', ') || 'nessun passaggio OCR valido';
     throw new Error('doppio controllo OCR senza accordo: ' + summary);
   }
   const selected = matchingCandidates
@@ -813,6 +961,162 @@ function renderInternetData(pricingSnapshots, exchangeRateSnapshots) {
   ].join('\n');
 }
 
+function renderExtraCreditPurchases(purchases) {
+  const sorted = purchases
+    .slice()
+    .sort((a, b) => a.purchasedAt.localeCompare(b.purchasedAt));
+  const totals = aggregateExtraCreditPurchases(sorted);
+  const rows = sorted.map((item) => [
+    '|', item.purchasedAt,
+    '|', item.credits,
+    '| EUR', formatDecimal(item.paidEur),
+    '| EUR', formatDecimal(item.paidEur / item.credits, 4),
+    '|', item.source,
+    '|', item.id, '|',
+  ].join(' ')).join('\n');
+  return [
+    '# Crediti extra acquistati e spesi',
+    '',
+    'Generato il: ' + new Date().toISOString(),
+    '',
+    'Questi dati sono dichiarati manualmente dall\'utente e restano separati dalle',
+    'stime derivate dagli screenshot. Per regola, ogni credito acquistato viene',
+    'considerato già speso e il residuo assunto è zero.',
+    '',
+    '- Acquisti registrati: ' + totals.count,
+    '- Crediti acquistati e considerati spesi: ' + formatInteger(totals.credits),
+    '- Importo pagato: EUR ' + formatDecimal(totals.paidEur),
+    '',
+    '| Acquistati il | Crediti acquistati e spesi | Importo pagato | EUR per credito | Origine | ID |',
+    '| --- | ---: | ---: | ---: | --- | --- |',
+    rows || '| Nessun acquisto dichiarato | — | — | — | — | — |',
+    '',
+  ].join('\n');
+}
+
+function renderBillingCalibration(calibrations) {
+  const calibration = selectBillingCalibration(calibrations);
+  if (!calibration) {
+    return [
+      '# Calibrazione di fatturazione',
+      '',
+      'Nessuna calibrazione disponibile.',
+      '',
+    ].join('\n');
+  }
+  const observations = calibration.observations.map((item) => [
+    '|', item.reasoning,
+    '|', item.executionMode ?? 'standard',
+    '|', item.durationSeconds,
+    '|', formatDecimal(item.durationMinutes, 4),
+    '| EUR', formatDecimal(item.billedEur),
+    '| EUR', formatDecimal(item.eurPerMinute, 6), '|',
+  ].join(' ')).join('\n');
+
+  return [
+    '# Calibrazione di fatturazione',
+    '',
+    'Generato il: ' + new Date().toISOString(),
+    '',
+    'Origine: dati dichiarati dall\'utente. Osservazioni e risultati derivati',
+    'rimangono distinti.',
+    '',
+    '## Osservazioni',
+    '',
+    '| Reasoning | Modalità | Secondi | Minuti | Fatturato | EUR/minuto |',
+    '| --- | --- | ---: | ---: | ---: | ---: |',
+    observations,
+    '',
+    '## Calibrazione derivata',
+    '',
+    '- Percentuale piano osservata: ' + formatDecimal(calibration.planWindow.observedUsagePct) + '%',
+    '- Valore osservato arrotondato: EUR ' + formatDecimal(calibration.planWindow.estimatedBilledEur),
+    '- Valore stimato del 100%: EUR ' + formatDecimal(calibration.fullWindowEur, 6),
+    '- Prezzo dichiarato per credito: EUR ' + formatDecimal(calibration.eurPerCredit, 6),
+    '- Crediti equivalenti al 100%: ' + formatDecimal(calibration.fullWindowCredits, 6),
+    '- Minuti equivalenti al 100% con il pilota ' + calibration.pilot.reasoning + ': ' +
+      formatDecimal(calibration.fullWindowPilotMinutes, 6),
+    '',
+    'ID calibrazione: ' + calibration.id,
+    '',
+  ].join('\n');
+}
+
+function renderBillingEstimates(usages, calibrations, pricingSnapshots, purchases) {
+  const calibration = selectBillingCalibration(calibrations);
+  const pricingById = new Map(pricingSnapshots.map((item) => [item.id, item]));
+  const rows = calibration ? usages
+    .slice()
+    .sort((a, b) => a.capturedAtLocal.localeCompare(b.capturedAtLocal))
+    .map((usage) => {
+      const pricing = pricingById.get(usage.pricingSnapshotId) ?? pricingSnapshots.at(-1);
+      const estimate = estimateCalibratedUsage(usage, calibration, pricing);
+      return [
+        '|', usage.capturedAtLocal,
+        '|', usage.fiveHour.usedPct + '%',
+        '|', formatDecimal(estimate.usedCredits, 6),
+        '| EUR', formatDecimal(estimate.equivalentEur, 6),
+        '|', formatDecimal(estimate.pilotMinutes, 6),
+        '|', estimate.tokenEquivalent ? formatInteger(estimate.tokenEquivalent.input) : 'N/D',
+        '|', estimate.tokenEquivalent ? formatInteger(estimate.tokenEquivalent.cachedInput) : 'N/D',
+        '|', estimate.tokenEquivalent ? formatInteger(estimate.tokenEquivalent.output) : 'N/D', '|',
+      ].join(' ');
+    }).join('\n') : '';
+  const planTotals = aggregateCalibratedTotals(usages, calibrations, pricingSnapshots);
+  const purchased = aggregateExtraCreditPurchases(purchases);
+  const totals = aggregatePrimaryConsumption(usages, calibrations, pricingSnapshots, purchases);
+  const latestPricing = pricingSnapshots.at(-1);
+  const extraRows = purchases.map((purchase) => [
+    '|', purchase.purchasedAt,
+    '|', formatDecimal(purchase.credits, 6),
+    '| EUR', formatDecimal(purchase.paidEur, 6),
+    '|', calibration
+      ? formatDecimal(purchase.paidEur / calibration.pilotObservation.eurPerMinute, 6)
+      : 'N/D',
+    '|', latestPricing
+      ? formatInteger(purchase.credits / latestPricing.creditsPerMillionTokens.input * 1_000_000)
+      : 'N/D',
+    '|', latestPricing
+      ? formatInteger(purchase.credits / latestPricing.creditsPerMillionTokens.cachedInput * 1_000_000)
+      : 'N/D',
+    '|', latestPricing
+      ? formatInteger(purchase.credits / latestPricing.creditsPerMillionTokens.output * 1_000_000)
+      : 'N/D', '|',
+  ].join(' ')).join('\n');
+  const totalSummary = totals ? [
+    '- Quota piano calibrata: ' + formatDecimal(planTotals?.usedCredits ?? 0, 6) +
+      ' crediti; quota extra già spesa: ' + formatDecimal(purchased.credits, 6) + ' crediti.',
+    '- Totale: ' + formatDecimal(totals.usedCredits, 6) +
+      ' crediti; costo equivalente EUR ' + formatDecimal(totals.spentEur, 6) +
+      '; minuti pilota: ' + formatDecimal(totals.pilotMinutes, 6) + '.',
+  ] : ['Nessuna calibrazione disponibile.'];
+
+  return [
+    '# Consumi calibrati sulla fatturazione',
+    '',
+    'Generato il: ' + new Date().toISOString(),
+    '',
+    'Questa è la stima primaria. Crediti e valore EUR derivano dalla calibrazione',
+    'dichiarata; i token equivalenti usano in aggiunta i rapporti crediti per milione',
+    'scaricati online e rappresentano scenari alternativi.',
+    '',
+    '| Rilevazione | Usato 5h | Crediti calibrati | Valore EUR | Minuti pilota | Token input | Token cache | Token output |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    rows || '| Nessuna stima calibrata | — | — | — | — | — | — | — |',
+    '',
+    '## Crediti extra considerati già spesi',
+    '',
+    '| Acquistati il | Crediti spesi | Importo EUR | Minuti pilota | Token input | Token cache | Token output |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+    extraRows || '| Nessun credito extra | — | — | — | — | — | — |',
+    '',
+    '## Totale senza doppio conteggio',
+    '',
+    ...totalSummary,
+    '',
+  ].join('\n');
+}
+
 function renderEstimates(usages, pricingSnapshots, exchangeRateSnapshots) {
   const pricingById = new Map(pricingSnapshots.map((item) => [item.id, item]));
   const rows = usages
@@ -846,11 +1150,12 @@ function renderEstimates(usages, pricingSnapshots, exchangeRateSnapshots) {
     formatter(value.min) + '-' + formatter(value.max);
 
   return [
-    '# Stime derivate',
+    '# Stime secondarie dai listini online',
     '',
     'Generato il: ' + new Date().toISOString(),
     '',
-    'Le stime non sono misure di token realmente consumati. La capacita della finestra',
+    'Questo è il metodo di confronto secondario e non la stima principale. Le stime',
+    'non sono misure di token realmente consumati. La capacità della finestra',
     'di 5 ore e stimata moltiplicando l intervallo ufficiale di messaggi per',
     'l intervallo ufficiale di crediti medi per messaggio. I token sono mostrati come',
     'tre equivalenti separati perche input, cache e output consumano crediti a tassi',
@@ -860,7 +1165,7 @@ function renderEstimates(usages, pricingSnapshots, exchangeRateSnapshots) {
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |',
     rows || '| Nessuna rilevazione | — | — | — | — | — | — | — | — | — |',
     '',
-    '## Totale senza doppio conteggio',
+    '## Totale online senza doppio conteggio',
     '',
     'Sono considerate ' + totals.includedWindows + ' finestre di 5 ore distinte su ' +
       totals.sourceSnapshots + ' rilevazioni. Nella stessa finestra viene usata',
@@ -881,25 +1186,66 @@ function renderEstimates(usages, pricingSnapshots, exchangeRateSnapshots) {
 }
 
 async function renderReports() {
-  const [usages, pricingSnapshots, exchangeRateSnapshots] = await Promise.all([
+  const [
+    usages,
+    pricingSnapshots,
+    exchangeRateSnapshots,
+    extraCreditPurchases,
+    billingCalibrations,
+  ] = await Promise.all([
     readJsonLines(usageDataFile),
     readJsonLines(pricingDataFile),
     readJsonLines(exchangeRateDataFile),
+    readJsonLines(extraCreditDataFile),
+    readJsonLines(billingCalibrationDataFile),
   ]);
 
   await Promise.all([
     atomicWrite(path.join(reportsDir, 'usage-history.md'), renderUsageHistory(usages)),
+    atomicWrite(path.join(reportsDir, 'extra-credit-purchases.md'), renderExtraCreditPurchases(extraCreditPurchases)),
+    atomicWrite(path.join(reportsDir, 'billing-calibration.md'), renderBillingCalibration(billingCalibrations)),
+    atomicWrite(
+      path.join(reportsDir, 'billing-estimates.md'),
+      renderBillingEstimates(usages, billingCalibrations, pricingSnapshots, extraCreditPurchases),
+    ),
     atomicWrite(path.join(reportsDir, 'internet-data.md'), renderInternetData(pricingSnapshots, exchangeRateSnapshots)),
     atomicWrite(path.join(reportsDir, 'estimates.md'), renderEstimates(usages, pricingSnapshots, exchangeRateSnapshots)),
     atomicWrite(
       path.join(reportsDir, 'dashboard.html'),
-      renderDashboard(usages, pricingSnapshots, exchangeRateSnapshots, timeZone, { projectName }),
+      renderDashboard(usages, pricingSnapshots, exchangeRateSnapshots, timeZone, {
+        projectName,
+        extraCreditPurchases,
+        billingCalibrations,
+      }),
     ),
     atomicWrite(path.join(csvReportsDir, 'usage-history.csv'), renderUsageCsv(usages)),
     atomicWrite(path.join(csvReportsDir, 'internet-data.csv'), renderInternetCsv(pricingSnapshots)),
     atomicWrite(path.join(csvReportsDir, 'exchange-rates.csv'), renderExchangeRatesCsv(exchangeRateSnapshots)),
+    atomicWrite(path.join(csvReportsDir, 'extra-credit-purchases.csv'), renderExtraCreditPurchasesCsv(extraCreditPurchases)),
+    atomicWrite(
+      path.join(csvReportsDir, 'billing-calibration.csv'),
+      renderBillingCalibrationCsv(billingCalibrations),
+    ),
+    atomicWrite(
+      path.join(csvReportsDir, 'billing-estimates.csv'),
+      renderBillingEstimatesCsv(
+        usages,
+        billingCalibrations,
+        pricingSnapshots,
+        extraCreditPurchases,
+      ),
+    ),
     atomicWrite(path.join(csvReportsDir, 'estimates.csv'), renderEstimatesCsv(usages, pricingSnapshots, exchangeRateSnapshots)),
-    atomicWrite(path.join(csvReportsDir, 'totals.csv'), renderTotalsCsv(usages, pricingSnapshots, exchangeRateSnapshots)),
+    atomicWrite(
+      path.join(csvReportsDir, 'totals.csv'),
+      renderTotalsCsv(
+        usages,
+        pricingSnapshots,
+        exchangeRateSnapshots,
+        extraCreditPurchases,
+        billingCalibrations,
+      ),
+    ),
   ]);
 }
 
@@ -917,6 +1263,11 @@ async function archiveImage(imagePath, imageName, imageHash) {
 
 async function main() {
   await ensureDirectories();
+  if (recordExtraCredits) {
+    await recordExtraCreditPurchase();
+    await renderReports();
+    return;
+  }
   if (verifyProcessed) {
     await verifyProcessedImages();
     return;

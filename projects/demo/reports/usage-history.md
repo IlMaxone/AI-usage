@@ -1,6 +1,6 @@
 # Storico delle rilevazioni
 
-Generato il: 2026-09-02T07:47:05.681Z
+Generato il: 2026-09-03T12:37:32.325Z
 
 Questa tabella contiene soltanto dati estratti dalle immagini locali. Non
 contiene prezzi o altri dati scaricati da Internet.

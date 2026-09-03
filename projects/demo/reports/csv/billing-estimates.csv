@@ -1,0 +1,5 @@
+﻿"rilevazione_locale","usato_5h_percento","crediti_calibrati_usati","valore_calibrato_eur","minuti_equivalenti_pilota","token_equivalenti_input","token_equivalenti_cache","token_equivalenti_output","calibrazione_id","snapshot_prezzi_id","origine_consumo"
+"2026-01-05T09:15:00","20","40","2","20","333333.3333333333","3333333.3333333335","66666.66666666667","billing-calibration-demo-v1","pricing-demo-2026-01-05","piano_calibrato"
+"2026-01-05T12:00:00","55","110.00000000000001","5.5","55.00000000000001","916666.6666666667","9166666.666666668","183333.33333333334","billing-calibration-demo-v1","pricing-demo-2026-01-05","piano_calibrato"
+"2026-01-06T16:30:00","70","140","7","70","1166666.6666666667","11666666.666666666","233333.33333333334","billing-calibration-demo-v1","pricing-demo-2026-01-05","piano_calibrato"
+"2026-01-06T17:00:00.000Z","","500","20","200","4166666.666666667","41666666.666666664","833333.3333333334","billing-calibration-demo-v1","pricing-demo-2026-01-05","crediti_extra_gia_spesi"

@@ -1,0 +1,4 @@
+﻿"calibrazione_id","registrata_utc","modello","pilota_reasoning","osservazione_reasoning","modalita_esecuzione","durata_secondi","durata_minuti","fatturato_eur","eur_per_minuto","uso_piano_osservato_percento","costo_osservato_eur","valore_100_percento_eur","crediti_pacchetto","costo_pacchetto_eur","eur_per_credito","crediti_100_percento","minuti_pilota_100_percento","origine"
+"billing-calibration-demo-v1","2026-01-06T17:02:00.000Z","modello-demo","demo-high","demo-xhigh","flash","600","10","2","0.2","50","5","10","200","10","0.05","200","100","demo"
+"billing-calibration-demo-v1","2026-01-06T17:02:00.000Z","modello-demo","demo-high","demo-medium","standard","600","10","1.2","0.12","50","5","10","200","10","0.05","200","100","demo"
+"billing-calibration-demo-v1","2026-01-06T17:02:00.000Z","modello-demo","demo-high","demo-high","standard","600","10","1","0.1","50","5","10","200","10","0.05","200","100","demo"

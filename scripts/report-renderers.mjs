@@ -82,6 +82,85 @@ export function estimateUsage(usage, pricing) {
   };
 }
 
+export function deriveBillingCalibration(calibration) {
+  if (!calibration) return null;
+  const { planWindow, creditPack, billingObservations, pilot } = calibration;
+  if (
+    !planWindow || !Number.isFinite(planWindow.observedUsagePct) ||
+    planWindow.observedUsagePct <= 0 || planWindow.observedUsagePct > 100 ||
+    !Number.isFinite(planWindow.estimatedBilledEur) || planWindow.estimatedBilledEur <= 0 ||
+    !creditPack || !Number.isFinite(creditPack.credits) || creditPack.credits <= 0 ||
+    !Number.isFinite(creditPack.paidEur) || creditPack.paidEur <= 0 ||
+    !Array.isArray(billingObservations) || billingObservations.length === 0 ||
+    !pilot?.reasoning
+  ) {
+    throw new Error('Calibrazione di fatturazione non valida: ' + (calibration.id ?? 'ID mancante') + '.');
+  }
+
+  const observations = billingObservations.map((item) => {
+    if (
+      !item.reasoning || !Number.isFinite(item.durationSeconds) || item.durationSeconds <= 0 ||
+      !Number.isFinite(item.billedEur) || item.billedEur <= 0
+    ) {
+      throw new Error('Osservazione di fatturazione non valida nella calibrazione ' + calibration.id + '.');
+    }
+    return {
+      ...item,
+      durationMinutes: item.durationSeconds / 60,
+      eurPerMinute: item.billedEur / (item.durationSeconds / 60),
+    };
+  });
+  const pilotObservation = observations.find((item) => (
+    item.reasoning === pilot.reasoning &&
+    (item.executionMode ?? null) === (pilot.executionMode ?? null)
+  ));
+  if (!pilotObservation) {
+    throw new Error('Osservazione del pilota non trovata nella calibrazione ' + calibration.id + '.');
+  }
+
+  const fullWindowEur = planWindow.estimatedBilledEur / (planWindow.observedUsagePct / 100);
+  const eurPerCredit = creditPack.paidEur / creditPack.credits;
+  const fullWindowCredits = fullWindowEur / eurPerCredit;
+  return {
+    ...calibration,
+    observations,
+    pilotObservation,
+    fullWindowEur,
+    eurPerCredit,
+    creditsPerEur: 1 / eurPerCredit,
+    fullWindowCredits,
+    fullWindowPilotMinutes: fullWindowEur / pilotObservation.eurPerMinute,
+  };
+}
+
+export function selectBillingCalibration(calibrations) {
+  if (calibrations.length === 0) return null;
+  return deriveBillingCalibration(
+    calibrations.slice().sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)).at(-1),
+  );
+}
+
+export function estimateCalibratedUsage(usage, calibration, pricing) {
+  const derived = calibration?.fullWindowCredits === undefined
+    ? deriveBillingCalibration(calibration)
+    : calibration;
+  if (!derived) return null;
+  const usedRatio = usage.fiveHour.usedPct / 100;
+  const usedCredits = derived.fullWindowCredits * usedRatio;
+  const equivalent = (rate) => rate ? usedCredits / rate * 1_000_000 : null;
+  return {
+    usedRatio,
+    usedCredits,
+    equivalentEur: derived.fullWindowEur * usedRatio,
+    pilotMinutes: derived.fullWindowPilotMinutes * usedRatio,
+    tokenEquivalent: pricing ? {
+      input: equivalent(pricing.creditsPerMillionTokens.input),
+      cachedInput: equivalent(pricing.creditsPerMillionTokens.cachedInput),
+      output: equivalent(pricing.creditsPerMillionTokens.output),
+    } : null,
+  };
+}
+
 export function selectUsageWindows(usages) {
   const byReset = new Map();
   for (const usage of usages) {
@@ -157,6 +236,82 @@ export function aggregateTotals(usages, pricingSnapshots, exchangeRateSnapshots)
     ...totals,
     exchangeRatesUsed: [...totals.exchangeRatesUsed],
     sourceSnapshots: usages.length,
+  };
+}
+
+export function aggregateCalibratedTotals(usages, calibrations, pricingSnapshots) {
+  const calibration = selectBillingCalibration(calibrations);
+  if (!calibration) return null;
+  const pricingById = new Map(pricingSnapshots.map((item) => [item.id, item]));
+  const windows = selectUsageWindows(usages);
+  const totals = {
+    calibration,
+    windows: windows.length,
+    sourceSnapshots: usages.length,
+    usedCredits: 0,
+    equivalentEur: 0,
+    pilotMinutes: 0,
+    tokenEquivalent: { input: 0, cachedInput: 0, output: 0 },
+    tokenWindows: 0,
+  };
+
+  for (const usage of windows) {
+    const pricing = pricingById.get(usage.pricingSnapshotId) ?? pricingSnapshots.at(-1);
+    const estimate = estimateCalibratedUsage(usage, calibration, pricing);
+    totals.usedCredits += estimate.usedCredits;
+    totals.equivalentEur += estimate.equivalentEur;
+    totals.pilotMinutes += estimate.pilotMinutes;
+    if (estimate.tokenEquivalent) {
+      totals.tokenWindows += 1;
+      for (const kind of ['input', 'cachedInput', 'output']) {
+        totals.tokenEquivalent[kind] += estimate.tokenEquivalent[kind];
+      }
+    }
+  }
+  return totals;
+}
+
+export function aggregateExtraCreditPurchases(purchases) {
+  const totals = { count: purchases.length, credits: 0, paidEur: 0 };
+  for (const item of purchases) {
+    if (
+      !Number.isInteger(item.credits) || item.credits <= 0 ||
+      !Number.isFinite(item.paidEur) || item.paidEur <= 0 ||
+      item.currency !== 'EUR' || Number.isNaN(Date.parse(item.purchasedAt))
+    ) {
+      throw new Error('Acquisto di crediti extra non valido: ' + (item.id ?? 'ID mancante') + '.');
+    }
+    totals.credits += item.credits;
+    totals.paidEur += item.paidEur;
+  }
+  totals.paidEur = Math.round(totals.paidEur * 100) / 100;
+  return totals;
+}
+
+export function aggregatePrimaryConsumption(usages, calibrations, pricingSnapshots, purchases) {
+  const plan = aggregateCalibratedTotals(usages, calibrations, pricingSnapshots);
+  const extra = aggregateExtraCreditPurchases(purchases);
+  const pricing = pricingSnapshots.at(-1);
+  if (!plan && extra.count === 0) return null;
+  const extraTokenEquivalent = {
+    input: pricing ? extra.credits / pricing.creditsPerMillionTokens.input * 1_000_000 : 0,
+    cachedInput: pricing ? extra.credits / pricing.creditsPerMillionTokens.cachedInput * 1_000_000 : 0,
+    output: pricing ? extra.credits / pricing.creditsPerMillionTokens.output * 1_000_000 : 0,
+  };
+  return {
+    plan,
+    extra,
+    usedCredits: (plan?.usedCredits ?? 0) + extra.credits,
+    spentEur: (plan?.equivalentEur ?? 0) + extra.paidEur,
+    pilotMinutes: plan
+      ? plan.pilotMinutes + extra.paidEur / plan.calibration.pilotObservation.eurPerMinute
+      : null,
+    tokenEquivalent: {
+      input: (plan?.tokenEquivalent.input ?? 0) + extraTokenEquivalent.input,
+      cachedInput: (plan?.tokenEquivalent.cachedInput ?? 0) + extraTokenEquivalent.cachedInput,
+      output: (plan?.tokenEquivalent.output ?? 0) + extraTokenEquivalent.output,
+    },
+    tokenConversionAvailable: Boolean(pricing),
   };
 }
 
@@ -332,9 +487,160 @@ export function renderExchangeRatesCsv(exchangeRateSnapshots) {
   return csvDocument(headers, rows);
 }
 
-export function renderTotalsCsv(usages, pricingSnapshots, exchangeRateSnapshots) {
-  const totals = aggregateTotals(usages, pricingSnapshots, exchangeRateSnapshots);
+export function renderExtraCreditPurchasesCsv(purchases) {
+  aggregateExtraCreditPurchases(purchases);
   const headers = [
+    'acquistati_utc',
+    'registrati_utc',
+    'crediti_acquistati',
+    'crediti_considerati_spesi',
+    'residuo_assunto_crediti',
+    'importo_pagato_eur',
+    'eur_per_credito',
+    'origine',
+    'id',
+  ];
+  const rows = purchases
+    .slice()
+    .sort((a, b) => a.purchasedAt.localeCompare(b.purchasedAt))
+    .map((item) => [
+      item.purchasedAt,
+      item.recordedAt,
+      item.credits,
+      item.credits,
+      0,
+      item.paidEur,
+      item.paidEur / item.credits,
+      item.source,
+      item.id,
+    ]);
+  return csvDocument(headers, rows);
+}
+
+export function renderBillingCalibrationCsv(calibrations) {
+  const headers = [
+    'calibrazione_id',
+    'registrata_utc',
+    'modello',
+    'pilota_reasoning',
+    'osservazione_reasoning',
+    'modalita_esecuzione',
+    'durata_secondi',
+    'durata_minuti',
+    'fatturato_eur',
+    'eur_per_minuto',
+    'uso_piano_osservato_percento',
+    'costo_osservato_eur',
+    'valore_100_percento_eur',
+    'crediti_pacchetto',
+    'costo_pacchetto_eur',
+    'eur_per_credito',
+    'crediti_100_percento',
+    'minuti_pilota_100_percento',
+    'origine',
+  ];
+  const rows = calibrations.flatMap((item) => {
+    const derived = deriveBillingCalibration(item);
+    return derived.observations.map((observation) => [
+      derived.id,
+      derived.recordedAt,
+      derived.model,
+      derived.pilot.reasoning,
+      observation.reasoning,
+      observation.executionMode ?? 'standard',
+      observation.durationSeconds,
+      observation.durationMinutes,
+      observation.billedEur,
+      observation.eurPerMinute,
+      derived.planWindow.observedUsagePct,
+      derived.planWindow.estimatedBilledEur,
+      derived.fullWindowEur,
+      derived.creditPack.credits,
+      derived.creditPack.paidEur,
+      derived.eurPerCredit,
+      derived.fullWindowCredits,
+      derived.fullWindowPilotMinutes,
+      derived.source,
+    ]);
+  });
+  return csvDocument(headers, rows);
+}
+
+export function renderBillingEstimatesCsv(usages, calibrations, pricingSnapshots, purchases = []) {
+  const calibration = selectBillingCalibration(calibrations);
+  const pricingById = new Map(pricingSnapshots.map((item) => [item.id, item]));
+  const headers = [
+    'rilevazione_locale',
+    'usato_5h_percento',
+    'crediti_calibrati_usati',
+    'valore_calibrato_eur',
+    'minuti_equivalenti_pilota',
+    'token_equivalenti_input',
+    'token_equivalenti_cache',
+    'token_equivalenti_output',
+    'calibrazione_id',
+    'snapshot_prezzi_id',
+    'origine_consumo',
+  ];
+  const usageRows = calibration ? usages.map((usage) => {
+    const pricing = pricingById.get(usage.pricingSnapshotId) ?? pricingSnapshots.at(-1);
+    const estimate = estimateCalibratedUsage(usage, calibration, pricing);
+    return [
+      usage.capturedAtLocal,
+      usage.fiveHour.usedPct,
+      estimate.usedCredits,
+      estimate.equivalentEur,
+      estimate.pilotMinutes,
+      estimate.tokenEquivalent?.input,
+      estimate.tokenEquivalent?.cachedInput,
+      estimate.tokenEquivalent?.output,
+      calibration.id,
+      pricing?.id,
+      'piano_calibrato',
+    ];
+  }) : [];
+  const latestPricing = pricingSnapshots.at(-1);
+  const purchaseRows = purchases.map((purchase) => [
+    purchase.purchasedAt,
+    null,
+    purchase.credits,
+    purchase.paidEur,
+    calibration ? purchase.paidEur / calibration.pilotObservation.eurPerMinute : null,
+    latestPricing ? purchase.credits / latestPricing.creditsPerMillionTokens.input * 1_000_000 : null,
+    latestPricing ? purchase.credits / latestPricing.creditsPerMillionTokens.cachedInput * 1_000_000 : null,
+    latestPricing ? purchase.credits / latestPricing.creditsPerMillionTokens.output * 1_000_000 : null,
+    calibration?.id,
+    latestPricing?.id,
+    'crediti_extra_gia_spesi',
+  ]);
+  return csvDocument(headers, [...usageRows, ...purchaseRows]);
+}
+
+export function renderTotalsCsv(
+  usages,
+  pricingSnapshots,
+  exchangeRateSnapshots,
+  purchases = [],
+  calibrations = [],
+) {
+  const totals = aggregateTotals(usages, pricingSnapshots, exchangeRateSnapshots);
+  const calibrated = aggregateCalibratedTotals(usages, calibrations, pricingSnapshots);
+  const primary = aggregatePrimaryConsumption(usages, calibrations, pricingSnapshots, purchases);
+  const purchased = aggregateExtraCreditPurchases(purchases);
+  const headers = [
+    'metodo_primario',
+    'calibrazione_id',
+    'crediti_totali_spesi',
+    'costo_totale_eur',
+    'minuti_totali_equivalenti_pilota',
+    'token_totali_input',
+    'token_totali_cache',
+    'token_totali_output',
+    'crediti_piano_calibrati',
+    'valore_piano_calibrato_eur',
+    'acquisti_extra_dichiarati',
+    'crediti_extra_acquistati_e_spesi',
+    'importo_extra_pagato_eur',
     'finestre_5h_distinte',
     'rilevazioni_sorgente',
     'finestre_incluse',
@@ -355,6 +661,19 @@ export function renderTotalsCsv(usages, pricingSnapshots, exchangeRateSnapshots)
     'metodo',
   ];
   const rows = [[
+    primary ? 'fatturazione_dichiarata_piu_crediti_extra_spesi' : 'non_disponibile',
+    calibrated?.calibration.id,
+    primary?.usedCredits,
+    primary?.spentEur,
+    primary?.pilotMinutes,
+    primary?.tokenEquivalent.input,
+    primary?.tokenEquivalent.cachedInput,
+    primary?.tokenEquivalent.output,
+    calibrated?.usedCredits,
+    calibrated?.equivalentEur,
+    purchased.count,
+    purchased.credits,
+    purchased.paidEur,
     totals.windows,
     totals.sourceSnapshots,
     totals.includedWindows,
@@ -372,7 +691,7 @@ export function renderTotalsCsv(usages, pricingSnapshots, exchangeRateSnapshots)
     totals.apiCostEur.min,
     totals.apiCostEur.max,
     totals.exchangeRatesUsed.join('|'),
-    'Una sola rilevazione per finestra 5h, scegliendo la percentuale usata massima.',
+    'Piano: una rilevazione massima per finestra 5h. Crediti extra: considerati interamente spesi.',
   ]];
   return csvDocument(headers, rows);
 }
@@ -499,6 +818,66 @@ function estimateRows(usages, pricingSnapshots, exchangeRateSnapshots) {
     }).join('');
 }
 
+function displayDuration(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return minutes + ':' + String(remainingSeconds).padStart(2, '0');
+}
+
+function billingObservationRows(calibration) {
+  if (!calibration) return '';
+  return calibration.observations.map((item) => [
+    '<tr>',
+    '<td><strong>' + escapeHtml(item.reasoning) + '</strong><span class="sub">' +
+      escapeHtml(item.executionMode ?? 'standard') + '</span></td>',
+    '<td>' + displayDuration(item.durationSeconds) + '</td>',
+    '<td>€' + formatDecimal(item.billedEur) + '</td>',
+    '<td><strong>€' + formatDecimal(item.eurPerMinute, 4) + '</strong></td>',
+    '</tr>',
+  ].join('')).join('');
+}
+
+function calibratedUsageRows(usages, calibration, pricingSnapshots) {
+  if (!calibration) return '';
+  const pricingById = new Map(pricingSnapshots.map((item) => [item.id, item]));
+  return usages
+    .slice()
+    .sort((a, b) => b.capturedAtLocal.localeCompare(a.capturedAtLocal))
+    .map((usage) => {
+      const pricing = pricingById.get(usage.pricingSnapshotId) ?? pricingSnapshots.at(-1);
+      const estimate = estimateCalibratedUsage(usage, calibration, pricing);
+      return [
+        '<tr>',
+        '<td>' + escapeHtml(displayLocalDate(usage.capturedAtLocal)) + '</td>',
+        '<td>' + usage.fiveHour.usedPct + '%</td>',
+        '<td><strong>' + formatDecimal(estimate.usedCredits) + '</strong></td>',
+        '<td><strong>€' + formatDecimal(estimate.equivalentEur) + '</strong></td>',
+        '<td>' + formatDecimal(estimate.pilotMinutes) + ' min</td>',
+        '<td>' + (estimate.tokenEquivalent ? formatInteger(estimate.tokenEquivalent.input) : 'N/D') + '</td>',
+        '<td>' + (estimate.tokenEquivalent ? formatInteger(estimate.tokenEquivalent.output) : 'N/D') + '</td>',
+        '</tr>',
+      ].join('');
+    }).join('');
+}
+
+function extraCreditRows(purchases, timeZone) {
+  return purchases
+    .slice()
+    .sort((a, b) => b.purchasedAt.localeCompare(a.purchasedAt))
+    .map((item) => [
+      '<tr>',
+      '<td><strong>' + escapeHtml(displayInstant(item.purchasedAt, timeZone)) +
+        '</strong><span class="sub">' +
+        (item.source === 'demo' ? 'Dato dimostrativo inventato' : 'Dichiarato manualmente') +
+        '</span></td>',
+      '<td><strong>' + formatInteger(item.credits) + '</strong></td>',
+      '<td><strong>€' + formatDecimal(item.paidEur) + '</strong></td>',
+      '<td>€' + formatDecimal(item.paidEur / item.credits, 4) + '</td>',
+      '</tr>',
+    ].join(''))
+    .join('');
+}
+
 function sourceRows(pricingSnapshots, exchangeRateSnapshots, timeZone) {
   const pricingRows = pricingSnapshots
     .slice()
@@ -532,12 +911,26 @@ function sourceRows(pricingSnapshots, exchangeRateSnapshots, timeZone) {
 
 export function renderDashboard(usages, pricingSnapshots, exchangeRateSnapshots, timeZone, options = {}) {
   const projectName = options.projectName ?? 'Progetto';
+  const extraCreditPurchases = options.extraCreditPurchases ?? [];
+  const billingCalibrations = options.billingCalibrations ?? [];
   const isDemo = projectName.toLowerCase() === 'demo';
   const sorted = usages.slice().sort((a, b) => a.capturedAtLocal.localeCompare(b.capturedAtLocal));
   const latest = sorted.at(-1);
   const latestPricing = pricingSnapshots.at(-1);
   const latestExchangeRate = exchangeRateSnapshots.at(-1);
   const totals = aggregateTotals(usages, pricingSnapshots, exchangeRateSnapshots);
+  const calibration = selectBillingCalibration(billingCalibrations);
+  const calibrated = aggregateCalibratedTotals(usages, billingCalibrations, pricingSnapshots);
+  const primary = aggregatePrimaryConsumption(
+    usages,
+    billingCalibrations,
+    pricingSnapshots,
+    extraCreditPurchases,
+  );
+  const purchased = aggregateExtraCreditPurchases(extraCreditPurchases);
+  const purchasedWindowEquivalents = calibration && purchased.credits > 0
+    ? purchased.credits / calibration.fullWindowCredits
+    : null;
   const generatedAt = new Date().toISOString();
   const priceAgeHours = latestPricing
     ? Math.floor((Date.now() - new Date(latestPricing.fetchedAt).getTime()) / 3_600_000)
@@ -590,27 +983,58 @@ export function renderDashboard(usages, pricingSnapshots, exchangeRateSnapshots,
     '<header class="hero"><div class="shell">',
     '<div class="eyebrow"><span class="dot"></span>Report statico · ' + escapeHtml(projectName) + '</div>',
     '<h1>Uso AI, <em>senza supposizioni.</em></h1>',
-    '<p class="lead">Dati rilevati dagli screenshot, prezzi scaricati dalle fonti ufficiali e stime derivate restano distinti. Questa pagina non invia dati e non richiede un server.</p>',
+    '<p class="lead">Percentuali dagli screenshot, osservazioni di fatturazione dichiarate, prezzi online e risultati derivati restano distinti. Questa pagina non invia dati e non richiede un server.</p>',
     '<div class="status-row"><span class="pill ' + freshnessClass + '">' + escapeHtml(freshnessText) +
       '</span><span class="pill">Generato: ' + escapeHtml(displayInstant(generatedAt, timeZone)) +
       '</span><span class="pill">' + usages.length + ' rilevazioni</span>' +
+      (calibration ? '<span class="pill ok">Calibrazione fatturazione attiva</span>' : '<span class="pill warn">Calibrazione assente</span>') +
+      (purchased.count > 0 ? '<span class="pill ok">' + formatInteger(purchased.credits) + ' crediti extra già spesi</span>' : '') +
       (isDemo ? '<span class="pill warn">Dati inventati</span>' : '') + '</div>',
-    '<div class="downloads"><a class="download" href="csv/totals.csv" download>Scarica totali CSV</a><a class="download secondary" href="csv/usage-history.csv" download>Scarica storico</a><a class="download secondary" href="csv/estimates.csv" download>Scarica stime</a><a class="download secondary" href="csv/internet-data.csv" download>Scarica prezzi</a><a class="download secondary" href="csv/exchange-rates.csv" download>Scarica cambi</a></div>',
+    '<div class="downloads"><a class="download" href="csv/totals.csv" download>Scarica totali CSV</a><a class="download secondary" href="csv/billing-estimates.csv" download>Scarica consumi calibrati</a><a class="download secondary" href="csv/billing-calibration.csv" download>Scarica calibrazione</a><a class="download secondary" href="csv/usage-history.csv" download>Scarica storico</a><a class="download secondary" href="csv/extra-credit-purchases.csv" download>Scarica acquisti extra</a><a class="download secondary" href="csv/estimates.csv" download>Scarica stime online</a><a class="download secondary" href="csv/internet-data.csv" download>Scarica prezzi</a><a class="download secondary" href="csv/exchange-rates.csv" download>Scarica cambi</a></div>',
     '</div></header>',
     '<main class="shell">',
     '<section class="cards" aria-label="Riepilogo">',
-    '<article class="card accent"><span class="label">Usato · finestra 5 ore</span><strong class="value">' +
+    '<article class="card accent"><span class="label">Crediti totali spesi</span><strong class="value">' +
+      (primary ? formatDecimal(primary.usedCredits) : '—') + '</strong><span class="context">Piano calibrato + crediti extra</span></article>',
+    '<article class="card blue"><span class="label">Costo totale equivalente</span><strong class="value">' +
+      (primary ? '€' + formatDecimal(primary.spentEur) : '—') + '</strong><span class="context">Valore piano + acquisti effettivi</span></article>',
+    '<article class="card"><span class="label">Usato · finestra 5 ore</span><strong class="value">' +
       (latest ? latest.fiveHour.usedPct + '%' : '—') + '</strong><span class="context">' +
       (latest ? 'Rilevazione ' + escapeHtml(displayLocalDate(latest.capturedAtLocal)) : 'Nessun dato') + '</span></article>',
-    '<article class="card blue"><span class="label">Usato · settimana</span><strong class="value">' +
+    '<article class="card"><span class="label">Usato · settimana</span><strong class="value">' +
       (latest ? latest.weekly.usedPct + '%' : '—') + '</strong><span class="context">' +
       (latest ? 'Reset ' + escapeHtml(displayLocalDate(latest.weekly.resetsOnLocal)) : 'Nessun dato') + '</span></article>',
-    '<article class="card"><span class="label">Prezzo input API</span><strong class="value">' +
-      (prices ? '$' + formatDecimal(prices.input) : '—') + '</strong><span class="context">Per 1 milione di token</span></article>',
-    '<article class="card"><span class="label">Prezzo output API</span><strong class="value">' +
-      (prices ? '$' + formatDecimal(prices.output) : '—') + '</strong><span class="context">Per 1 milione di token</span></article>',
     '</section>',
-    '<section class="section"><div class="section-head"><div><h2>Totale stimato</h2><p class="section-copy">Somma una sola rilevazione per ogni finestra di 5 ore, scegliendo la percentuale usata massima. Gli scenari token sono alternativi e non vanno sommati tra loro.</p></div><span class="pill warn">' +
+    '<section class="section"><div class="section-head"><div><h2>Consumo calibrato sulla fatturazione</h2><p class="section-copy">Stima primaria basata sui costi realmente osservati e sul rapporto dichiarato tra euro e crediti. Per ogni finestra usa la percentuale massima rilevata.</p></div><span class="pill ok">Metodo primario</span></div>' +
+      (calibrated && primary ? '<div class="totals-grid"><article class="total euro"><span class="label">Crediti totali spesi</span><strong>' +
+        formatDecimal(primary.usedCredits) + '</strong><span class="context">Piano + extra già spesi</span></article>' +
+        '<article class="total money"><span class="label">Costo totale equivalente</span><strong>€' +
+        formatDecimal(primary.spentEur) + '</strong><span class="context">Valore calibrato + acquisti reali</span></article>' +
+        '<article class="total"><span class="label">Quota piano calibrata</span><strong>' +
+        formatDecimal(calibrated.usedCredits) + '</strong><span class="context">' + calibrated.windows + ' finestre distinte</span></article>' +
+        '<article class="total"><span class="label">Quota extra già spesa</span><strong>' +
+        formatDecimal(purchased.credits) + '</strong><span class="context">€' + formatDecimal(purchased.paidEur) + ' pagati</span></article>' +
+        '<article class="total"><span class="label">Tempo equivalente · ' + escapeHtml(calibration.pilot.reasoning) + '</span><strong>' +
+        formatDecimal(primary.pilotMinutes) + ' min</strong><span class="context">Pilota ' + escapeHtml(calibration.model) + ' ' + escapeHtml(calibration.pilot.reasoning) + '</span></article>' +
+        '<article class="total"><span class="label">Token equivalenti · input</span><strong>' +
+        formatInteger(primary.tokenEquivalent.input) + '</strong><span class="context">Conversione con rapporto crediti online</span></article>' +
+        '<article class="total"><span class="label">Token equivalenti · cache</span><strong>' +
+        formatInteger(primary.tokenEquivalent.cachedInput) + '</strong><span class="context">Scenario alternativo</span></article>' +
+        '<article class="total"><span class="label">Token equivalenti · output</span><strong>' +
+        formatInteger(primary.tokenEquivalent.output) + '</strong><span class="context">Scenario alternativo</span></article></div>' +
+        '<div class="note"><strong>Calibrazione 100%:</strong> €' + formatDecimal(calibration.fullWindowEur) +
+        ' equivalgono a ' + formatDecimal(calibration.fullWindowCredits) + ' crediti e circa ' +
+        formatDecimal(calibration.fullWindowPilotMinutes) + ' minuti con il pilota ' +
+        escapeHtml(calibration.pilot.reasoning) + '. Deriva da ' +
+        formatDecimal(calibration.planWindow.observedUsagePct) + '% = €' +
+        formatDecimal(calibration.planWindow.estimatedBilledEur) + ' e da ' +
+        formatInteger(calibration.creditPack.credits) + ' crediti = €' +
+        formatDecimal(calibration.creditPack.paidEur) + '.</div>' +
+        '<div class="panel table-wrap" style="margin-top:14px"><table><thead><tr><th>Rilevazione</th><th>Uso 5h</th><th>Crediti</th><th>Valore EUR</th><th>Minuti ' +
+        escapeHtml(calibration.pilot.reasoning) + '</th><th>Token input</th><th>Token output</th></tr></thead><tbody>' +
+        calibratedUsageRows(usages, calibration, pricingSnapshots) + '</tbody></table></div>'
+        : '<div class="empty panel">Nessuna calibrazione di fatturazione disponibile.</div>') + '</section>',
+    '<section class="section"><div class="section-head"><div><h2>Confronto teorico dai listini online</h2><p class="section-copy">Calcolo secondario basato sugli intervalli pubblicati online. Resta disponibile per confronto e non sostituisce la calibrazione di fatturazione.</p></div><span class="pill warn">' +
       totals.includedWindows + ' finestre incluse</span></div><div class="totals-grid">',
     '<article class="total"><span class="label">Crediti stimati</span><strong>' +
       decimalRange(totals.credits) + '</strong><span class="context">Intervallo complessivo</span></article>',
@@ -628,6 +1052,28 @@ export function renderDashboard(usages, pricingSnapshots, exchangeRateSnapshots,
       ' screenshot sono stati ricondotti a ' + totals.windows + ' finestre distinte. ' +
       (totals.excludedWindows > 0 ? totals.excludedWindows + ' finestre non hanno dati sufficienti e sono escluse.' : 'Nessuna finestra è stata esclusa.') +
       '</div></section>',
+    '<section class="section"><div class="section-head"><div><h2>Crediti extra acquistati e spesi</h2><p class="section-copy">Valori inseriti manualmente dall’utente e conteggiati interamente come consumo già avvenuto.</p></div><span class="pill ok">Dati dichiarati</span></div><div class="totals-grid">',
+    '<article class="total"><span class="label">Acquisti registrati</span><strong>' +
+      purchased.count + '</strong><span class="context">Eventi append-only</span></article>',
+    '<article class="total euro"><span class="label">Crediti acquistati e spesi</span><strong>' +
+      formatInteger(purchased.credits) + '</strong><span class="context">' +
+      (purchasedWindowEquivalents === null
+        ? 'Totale dichiarato'
+        : formatDecimal(purchasedWindowEquivalents) + ' finestre calibrate al 100%') + '</span></article>',
+    '<article class="total money"><span class="label">Importo pagato</span><strong>€' +
+      formatDecimal(purchased.paidEur) + '</strong><span class="context">Costo effettivo dichiarato</span></article>',
+    '</div><div class="panel table-wrap" style="margin-top:14px"><table><thead><tr><th>Acquistati il</th><th>Crediti spesi</th><th>Importo pagato</th><th>EUR per credito</th></tr></thead><tbody>' +
+      (extraCreditRows(extraCreditPurchases, timeZone) || '<tr><td colspan="4">Nessun acquisto extra dichiarato.</td></tr>') +
+      '</tbody></table></div><div class="note"><strong>Regola di calcolo:</strong> ogni credito acquistato viene considerato già speso. Il residuo assunto è quindi zero e la quota extra entra nel totale dei crediti e dei token equivalenti consumati.</div></section>',
+    '<section class="section"><div class="section-head"><div><h2>Base della calibrazione</h2><p class="section-copy">Osservazioni di fatturazione dichiarate dall’utente. I valori al minuto sono ricalcolati da durata e importo, non inseriti come risultato.</p></div><span class="pill">Dati osservati</span></div>' +
+      (calibration ? '<div class="panel table-wrap"><table><thead><tr><th>Reasoning</th><th>Durata</th><th>Fatturato</th><th>EUR/minuto</th></tr></thead><tbody>' +
+        billingObservationRows(calibration) + '</tbody></table></div><div class="note"><strong>Osservazione del piano:</strong> ' +
+        formatDecimal(calibration.planWindow.observedUsagePct) + '% utilizzato in ' +
+        displayDuration(calibration.planWindow.observedDurationSeconds) + ' con ' +
+        escapeHtml(calibration.planWindow.sourceReasoning) + ' ' +
+        escapeHtml(calibration.planWindow.executionMode ?? 'standard') + ', valore stimato arrotondato €' +
+        formatDecimal(calibration.planWindow.estimatedBilledEur) + '.</div>'
+        : '<div class="empty panel">Nessuna osservazione disponibile.</div>') + '</section>',
     '<section class="section"><div class="section-head"><div><h2>Andamento utilizzo</h2><p class="section-copy">Percentuali effettivamente lette dalle immagini. I due limiti hanno finestre diverse e non vanno sommati.</p></div><div class="legend"><span class="key">5 ore</span><span class="key week">Settimana</span></div></div><div class="panel">' +
       chartMarkup(usages) + '</div></section>',
     '<section class="section"><div class="section-head"><div><h2>Storico rilevazioni</h2><p class="section-copy">Dati OCR locali conservati nello storico append-only.</p></div><span class="pill">Dati rilevati</span></div><div class="panel table-wrap"><table><thead><tr><th>Rilevazione</th><th>5 ore</th><th>Settimana</th><th>Reset 5h</th><th>Reset settimana</th><th>OCR</th></tr></thead><tbody>' +
@@ -647,7 +1093,7 @@ export function renderDashboard(usages, pricingSnapshots, exchangeRateSnapshots,
         : 'nessun tasso disponibile.') +
       ' Il tasso è informativo e non rappresenta necessariamente un cambio di transazione.</div>',
     '<div class="note"><strong>Limite noto:</strong> la capacità settimanale numerica non è pubblicata. Per questo la percentuale settimanale viene mostrata, ma non convertita in token o costo.</div></section>',
-    '<section class="section"><div class="section-head"><div><h2>Stime equivalenti</h2><p class="section-copy">Intervalli teorici, non token misurati né importi fatturati. Input, cache e output sono scenari separati.</p></div><span class="pill warn">Dati stimati</span></div><div class="panel table-wrap"><table><thead><tr><th>Rilevazione</th><th>Crediti</th><th>Token input</th><th>Token cache</th><th>Token output</th><th>Costo USD</th><th>Costo EUR</th><th>EUR/USD</th><th>Listino</th></tr></thead><tbody>' +
+    '<section class="section"><div class="section-head"><div><h2>Stime secondarie dai listini</h2><p class="section-copy">Intervalli teorici del metodo precedente, non token misurati né importi fatturati. Input, cache e output sono scenari separati.</p></div><span class="pill warn">Confronto online</span></div><div class="panel table-wrap"><table><thead><tr><th>Rilevazione</th><th>Crediti</th><th>Token input</th><th>Token cache</th><th>Token output</th><th>Costo USD</th><th>Costo EUR</th><th>EUR/USD</th><th>Listino</th></tr></thead><tbody>' +
       (estimateRows(usages, pricingSnapshots, exchangeRateSnapshots) || '<tr><td colspan="9">Nessuna stima disponibile.</td></tr>') + '</tbody></table></div></section>',
     '<section class="section"><div class="section-head"><div><h2>Provenienza Internet</h2><p class="section-copy">Ogni fonte conserva URL, data e ora di download, hash e copia grezza locale.</p></div><span class="pill">Dati scaricati</span></div><div class="panel table-wrap"><table><thead><tr><th>Scaricato</th><th>Tipo</th><th>Fonte</th><th>SHA-256</th></tr></thead><tbody>' +
       (sourceRows(pricingSnapshots, exchangeRateSnapshots, timeZone) || '<tr><td colspan="4">Nessuna fonte disponibile.</td></tr>') + '</tbody></table></div></section>',

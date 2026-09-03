@@ -8,6 +8,7 @@
     "analyze:offline": "node ./scripts/analyze.mjs --offline",
     "analyze:dry-run": "node ./scripts/analyze.mjs --dry-run",
     "verify:processed": "node ./scripts/analyze.mjs --verify-processed",
+    "credits:add": "node ./scripts/analyze.mjs --record-extra-credits",
     "demo:build": "node ./scripts/analyze.mjs --project demo --offline"
   },
   "dependencies": {
