@@ -10,8 +10,10 @@ e le dashboard HTML statiche non vengono letti né modificati da questi servizi.
 - `worker`: processo NestJS standalone per OCR locale Tesseract/Sharp;
 - `db`: PostgreSQL 17.
 
-Ogni servizio applicativo è costruito e avviato da Docker Compose. Immagini e
-database risiedono in volumi Docker, non nel repository. Il modello OCR viene
+Ogni servizio applicativo è costruito e avviato da Docker Compose. Il database
+risiede in un volume Docker; gli screenshot risiedono nella cartella host
+`web-app/storage/uploads/`, esclusa da Git e montata come `/data/uploads` in API
+e worker. Il modello OCR viene
 scaricato durante la build dell'immagine e il worker non richiede accesso a
 Internet durante l'elaborazione.
 
@@ -37,9 +39,10 @@ predefinito `GPT-5.6 Sol` e reasoning `high`.
 2. Dalla pagina Inserimento sceglie `Usage costante` con un solo screenshot,
    oppure `Segmento di usage` con screenshot iniziale e finale.
 3. Il pulsante `Avvia convalida` mette gli screenshot in coda. Il worker calcola
-   SHA-256 ed esegue tre letture OCR locali: originale, normalizzata e ad alto
-   contrasto. Una rilevazione
-   è validata solo se almeno due passaggi concordano su percentuali e reset.
+   SHA-256 ed esegue tre letture OCR locali mirate alla zona usage. Esegue inoltre
+   tre letture dell'angolo in basso a destra per data e ora. Una rilevazione è
+   validata solo se almeno due passaggi concordano sui valori e almeno due sulla
+   data e ora visibili nello screenshot.
 4. In caso di disaccordo l'immagine resta in `manual_review`; non viene creato
    alcuno snapshot di utilizzo e non viene salvato il testo OCR completo.
 5. Un singolo screenshot conserva l'usage corrente. Una coppia inizio/fine
@@ -48,6 +51,33 @@ predefinito `GPT-5.6 Sol` e reasoning `high`.
 6. I valori possono essere corretti dalla UI. La correzione è append-only e
    non sovrascrive lo snapshot OCR originale. La rilevazione può essere rimossa
    dalla vista mantenendo audit e dati tecnici tracciabili.
+7. Data e ora della rilevazione non dipendono dall'esecuzione OCR: per l'usage
+   costante provengono dallo screenshot singolo; per un segmento provengono dallo
+   screenshot finale. Eventuali rettifiche temporali storiche sono osservazioni
+   append-only separate e non modificano lo snapshot OCR originale.
+
+## Archivio screenshot e pagina Analisi
+
+Ogni immagine caricata viene conservata con nome tecnico univoco nella
+sottocartella del progetto:
+
+```text
+web-app/storage/uploads/<nome-progetto>--<id-breve>/
+```
+
+Il suffisso dell'ID evita collisioni fra progetti omonimi. Se un progetto viene
+rinominato dalla UI, API e database rinominano insieme la relativa cartella.
+L'archivio è intenzionalmente escluso da Git e può essere copiato per backup o
+recupero mentre lo stack è fermo; non rinominare a mano cartelle o file, perché
+i nomi tecnici sono collegati al database. La pagina **Analisi immagini** richiede
+la selezione di un progetto alla volta e permette di aprirne le immagini a piena
+dimensione.
+Durante la migrazione, eventuali file provenienti da database già azzerati e
+quindi privi di un progetto associabile vengono preservati in
+`storage/uploads/_unassigned/`; non compaiono nella pagina Analisi.
+Le immagini vengono lette dalla stessa cartella tramite un endpoint protetto da
+JWT: non esiste una directory web pubblica e ogni utente vede soltanto i propri
+upload.
 
 ## Integrità e privacy
 
@@ -104,17 +134,11 @@ npm run db:reset:with-backup
 ```
 
 Il reset verifica il nome esatto `ai-usage-web_postgres-data` prima di
-eliminarlo. Il volume `ai-usage-web_uploads`, che contiene le immagini, non
-viene rimosso.
+eliminarlo. La cartella `web-app/storage/uploads/`, che contiene le immagini,
+non viene rimossa.
 
-## Mockup grafici
+## Riferimento grafico conservato
 
-Le cinque proposte HTML autonome sono in `web-app/mockups`. Per aprire la
-galleria locale:
-
-```powershell
-npm run mockups
-```
-
-Poi visitare `http://localhost:4450`. Il server ascolta soltanto su
-`127.0.0.1` e non espone i mockup in rete.
+Il design Warm Workbench è applicato all'app Angular. Il solo mockup alternativo
+conservato per un possibile uso futuro è
+`web-app/mockups/03-aurora-glass.html`; le altre proposte sono state rimosse.

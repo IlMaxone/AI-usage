@@ -177,6 +177,16 @@ export class UsageCorrectionEntity {
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
 }
 
+@Entity('capture_time_observations')
+export class CaptureTimeObservationEntity {
+  @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
+  @Column({ name: 'upload_id', type: 'uuid' }) uploadId!: string;
+  @Column({ name: 'captured_at', type: 'timestamptz' }) capturedAt!: Date;
+  @Column({ type: 'varchar', length: 500 }) reason!: string;
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
+}
+
 @Entity('extra_credit_purchases')
 export class ExtraCreditPurchaseEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
@@ -226,6 +236,7 @@ export const ENTITIES = [
   UploadEntity,
   UsageSnapshotEntity,
   UsageCorrectionEntity,
+  CaptureTimeObservationEntity,
   ExtraCreditPurchaseEntity,
   BillingCalibrationEntity,
   AuditEventEntity,

@@ -8,6 +8,9 @@ import {
   Param,
   Patch,
   Post,
+  Query,
+  Res,
+  StreamableFile,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
@@ -15,9 +18,10 @@ import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Type } from 'class-transformer';
 import { IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUUID, Length, Max, Min } from 'class-validator';
-import type { Express } from 'express';
+import type { Express, Response } from 'express';
 import { diskStorage } from 'multer';
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { DataSource, In, Repository } from 'typeorm';
@@ -26,6 +30,7 @@ import { AuthUser, CurrentUser } from './common';
 import {
   AiModelEntity,
   AuditEventEntity,
+  CaptureTimeObservationEntity,
   ProjectEntity,
   UploadEntity,
   UsageCorrectionEntity,
@@ -33,6 +38,7 @@ import {
   UsageRecordMode,
   UsageSnapshotEntity,
 } from './entities';
+import { incomingDir, projectFolderName, relativeStorageKey, resolveStoredFile, uploadDir } from './storage';
 
 class CreateRecordDto {
   @IsUUID() projectId!: string;
@@ -76,8 +82,15 @@ export function computeRecordUsage(
 }
 
 const allowedMime = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const uploadDir = process.env.UPLOAD_DIR ?? path.resolve('storage/uploads');
 type RecordFiles = { single?: Express.Multer.File[]; start?: Express.Multer.File[]; end?: Express.Multer.File[] };
+
+function storedFilePath(storageKey: string): string {
+  try {
+    return resolveStoredFile(storageKey);
+  } catch {
+    throw new BadRequestException('Percorso immagine non valido');
+  }
+}
 
 @Controller('records')
 export class RecordsController {
@@ -88,6 +101,7 @@ export class RecordsController {
     @InjectRepository(UploadEntity) private readonly uploads: Repository<UploadEntity>,
     @InjectRepository(UsageSnapshotEntity) private readonly snapshots: Repository<UsageSnapshotEntity>,
     @InjectRepository(UsageCorrectionEntity) private readonly corrections: Repository<UsageCorrectionEntity>,
+    @InjectRepository(CaptureTimeObservationEntity) private readonly captureTimes: Repository<CaptureTimeObservationEntity>,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
   ) {}
@@ -98,12 +112,77 @@ export class RecordsController {
     return this.enrich(records, user.id);
   }
 
+  @Get('uploads/gallery')
+  async gallery(@CurrentUser() user: AuthUser, @Query('projectId') projectId?: string) {
+    if (!projectId) throw new BadRequestException('Seleziona un progetto');
+    const project = await this.projects.findOne({ where: { id: projectId, ownerId: user.id }, withDeleted: true });
+    if (!project) throw new NotFoundException('Progetto non trovato');
+    const uploads = await this.uploads.find({ where: { ownerId: user.id, projectId }, order: { createdAt: 'DESC' } });
+    const [records, snapshots, captureTimes] = await Promise.all([
+      this.records.find({ where: { ownerId: user.id }, withDeleted: true }),
+      uploads.length ? this.snapshots.find({ where: { uploadId: In(uploads.map((item) => item.id)) } }) : [],
+      uploads.length ? this.captureTimes.find({ where: { uploadId: In(uploads.map((item) => item.id)), ownerId: user.id }, order: { createdAt: 'DESC' } }) : [],
+    ]);
+    const recordById = new Map(records.map((item) => [item.id, item]));
+    const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
+    const captureTimeByUpload = new Map<string, CaptureTimeObservationEntity>();
+    for (const item of captureTimes) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
+    const available = await Promise.all(uploads.map(async (upload) => {
+      try {
+        await fs.access(storedFilePath(upload.storageKey));
+        const record = upload.recordId ? recordById.get(upload.recordId) : null;
+        return {
+          id: upload.id,
+          recordId: upload.recordId,
+          role: upload.role,
+          originalName: upload.originalName,
+          mime: upload.mime,
+          size: upload.size,
+          status: upload.status,
+          createdAt: upload.createdAt,
+          capturedAt: captureTimeByUpload.get(upload.id)?.capturedAt ?? snapshotByUpload.get(upload.id)?.capturedAt ?? null,
+          recordDeleted: Boolean(record?.deletedAt),
+          project: { id: project.id, name: project.name, color: project.color },
+        };
+      } catch {
+        return null;
+      }
+    }));
+    return available.filter((item) => item !== null);
+  }
+
+  @Get('uploads/:uploadId/content')
+  async image(
+    @CurrentUser() user: AuthUser,
+    @Param('uploadId') uploadId: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const upload = await this.uploads.findOneBy({ id: uploadId, ownerId: user.id });
+    if (!upload) throw new NotFoundException('Screenshot non trovato');
+    const filePath = storedFilePath(upload.storageKey);
+    try {
+      await fs.access(filePath);
+    } catch {
+      throw new NotFoundException('File dello screenshot non trovato');
+    }
+    response.setHeader('Content-Type', upload.mime);
+    response.setHeader('Content-Length', String(upload.size));
+    response.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(upload.originalName)}`);
+    response.setHeader('Cache-Control', 'private, no-store');
+    return new StreamableFile(createReadStream(filePath));
+  }
+
   @Post()
   @UseInterceptors(FileFieldsInterceptor(
     [{ name: 'single', maxCount: 1 }, { name: 'start', maxCount: 1 }, { name: 'end', maxCount: 1 }],
     {
       storage: diskStorage({
-        destination: uploadDir,
+        destination: (_request, _file, callback) => {
+          void fs.mkdir(incomingDir, { recursive: true }).then(
+            () => callback(null, incomingDir),
+            (error: unknown) => callback(error as Error, incomingDir),
+          );
+        },
         filename: (_request, file, callback) => callback(null, `${randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
       }),
       limits: { fileSize: Number(process.env.MAX_UPLOAD_BYTES ?? 10_485_760), files: 2 },
@@ -118,7 +197,15 @@ export class RecordsController {
     const allFiles = [...(files.single ?? []), ...(files.start ?? []), ...(files.end ?? [])];
     let record: UsageRecordEntity;
     try {
-      await this.validateReferences(user.id, dto.projectId, dto.modelId);
+      const project = await this.validateReferences(user.id, dto.projectId, dto.modelId);
+      const destination = path.join(uploadDir, projectFolderName(project));
+      await fs.mkdir(destination, { recursive: true });
+      for (const file of allFiles) {
+        const movedPath = path.join(destination, file.filename);
+        await fs.rename(file.path, movedPath);
+        file.path = movedPath;
+        file.filename = relativeStorageKey(movedPath);
+      }
       if (dto.mode === 'CONSTANT' && (!(files.single?.[0]) || allFiles.length !== 1)) {
         throw new BadRequestException('Usage costante richiede un solo screenshot');
       }
@@ -254,10 +341,11 @@ export class RecordsController {
     const uploadIds = records.flatMap((item) => this.uploadIds(item));
     const projectIds = [...new Set(records.map((item) => item.projectId))];
     const modelIds = [...new Set(records.map((item) => item.modelId))];
-    const [uploads, snapshots, corrections, projects, models] = await Promise.all([
+    const [uploads, snapshots, corrections, captureTimes, projects, models] = await Promise.all([
       uploadIds.length ? this.uploads.find({ where: { id: In(uploadIds), ownerId } }) : [],
       uploadIds.length ? this.snapshots.find({ where: { uploadId: In(uploadIds) } }) : [],
       uploadIds.length ? this.corrections.find({ where: { uploadId: In(uploadIds), ownerId }, order: { createdAt: 'DESC' } }) : [],
+      uploadIds.length ? this.captureTimes.find({ where: { uploadId: In(uploadIds), ownerId }, order: { createdAt: 'DESC' } }) : [],
       projectIds.length ? this.projects.find({ where: { id: In(projectIds), ownerId }, withDeleted: true }) : [],
       modelIds.length ? this.models.find({ where: { id: In(modelIds), ownerId }, withDeleted: true }) : [],
     ]);
@@ -265,12 +353,18 @@ export class RecordsController {
     const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
     const correctionByUpload = new Map<string, UsageCorrectionEntity>();
     for (const item of corrections) if (!correctionByUpload.has(item.uploadId)) correctionByUpload.set(item.uploadId, item);
+    const captureTimeByUpload = new Map<string, CaptureTimeObservationEntity>();
+    for (const item of captureTimes) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
     const projectById = new Map(projects.map((item) => [item.id, item]));
     const modelById = new Map(models.map((item) => [item.id, item]));
     const reading = (uploadId: string | null) => {
       if (!uploadId) return null;
       const upload = uploadById.get(uploadId) ?? null;
-      const rawSnapshot = snapshotByUpload.get(uploadId) ?? null;
+      const storedSnapshot = snapshotByUpload.get(uploadId) ?? null;
+      const observedCapture = captureTimeByUpload.get(uploadId);
+      const rawSnapshot = storedSnapshot && observedCapture
+        ? { ...storedSnapshot, capturedAt: observedCapture.capturedAt }
+        : storedSnapshot;
       const correction = correctionByUpload.get(uploadId) ?? null;
       return { upload, rawSnapshot, correction, effectiveSnapshot: correction ?? rawSnapshot };
     };
@@ -312,6 +406,7 @@ export class RecordsController {
     ]);
     if (!project) throw new NotFoundException('Progetto non trovato');
     if (!model) throw new NotFoundException('Modello non trovato');
+    return project;
   }
 
   private async refreshStatus(record: UsageRecordEntity) {

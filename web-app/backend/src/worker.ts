@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { createWorker, PSM, Worker } from 'tesseract.js';
 import { AppDataSource } from './database';
 import { AuditEventEntity, UploadEntity, UsageRecordEntity, UsageRecordStatus, UsageSnapshotEntity } from './entities';
+import { parseScreenshotCapturedAt } from './ocr-time';
 
 interface ParsedUsage {
   fiveHourRemainingPct: number;
@@ -19,6 +20,12 @@ interface ParsedUsage {
 interface Candidate {
   pass: string;
   usage: ParsedUsage;
+  confidence: number;
+}
+
+interface TimestampCandidate {
+  pass: string;
+  capturedAt: Date;
   confidence: number;
 }
 
@@ -104,7 +111,20 @@ async function candidate(worker: Worker, pass: string, input: string | Buffer, c
   }
 }
 
-async function recognize(worker: Worker, filePath: string, capturedAt: Date) {
+async function timestampCandidate(worker: Worker, pass: string, input: Buffer): Promise<TimestampCandidate | null> {
+  try {
+    const result = await worker.recognize(input);
+    return {
+      pass,
+      capturedAt: parseScreenshotCapturedAt(result.data.text),
+      confidence: Number(result.data.confidence.toFixed(2)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function recognize(worker: Worker, filePath: string) {
   const originalBuffer = await fs.readFile(filePath);
   const metadata = await sharp(originalBuffer).metadata();
   if (!metadata.width || !metadata.height) throw new Error('IMAGE_DIMENSIONS_UNREADABLE');
@@ -115,7 +135,15 @@ async function recognize(worker: Worker, filePath: string, capturedAt: Date) {
     ? Math.min(metadata.width, Math.max(360, Math.round(metadata.width * 0.2)))
     : metadata.width;
   const usageRegion = { left: 0, top: 0, width: regionWidth, height: metadata.height };
-  const [cropNormalized, cropSoft] = await Promise.all([
+  const timestampLeft = Math.max(0, Math.round(metadata.width * 0.78));
+  const timestampTop = Math.max(0, Math.round(metadata.height * 0.82));
+  const timestampRegion = {
+    left: timestampLeft,
+    top: timestampTop,
+    width: metadata.width - timestampLeft,
+    height: metadata.height - timestampTop,
+  };
+  const [cropNormalized, cropSoft, timestampNormalized, timestampSoft, timestampThreshold] = await Promise.all([
     sharp(originalBuffer)
       .extract(usageRegion)
       .resize({ width: 1800, withoutEnlargement: false, fit: 'inside' })
@@ -132,7 +160,55 @@ async function recognize(worker: Worker, filePath: string, capturedAt: Date) {
       .sharpen()
       .png()
       .toBuffer(),
+    sharp(originalBuffer)
+      .extract(timestampRegion)
+      .resize({ width: 1600, withoutEnlargement: false, fit: 'inside' })
+      .grayscale()
+      .normalize()
+      .sharpen()
+      .png()
+      .toBuffer(),
+    sharp(originalBuffer)
+      .extract(timestampRegion)
+      .resize({ width: 1600, withoutEnlargement: false, fit: 'inside' })
+      .grayscale()
+      .linear(1.25, 8)
+      .sharpen()
+      .png()
+      .toBuffer(),
+    sharp(originalBuffer)
+      .extract(timestampRegion)
+      .resize({ width: 1600, withoutEnlargement: false, fit: 'inside' })
+      .grayscale()
+      .threshold(150)
+      .png()
+      .toBuffer(),
   ]);
+
+  await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+  const timestampCandidates = (await Promise.all([
+    timestampCandidate(worker, 'timestamp-normalized', timestampNormalized),
+    timestampCandidate(worker, 'timestamp-soft', timestampSoft),
+    timestampCandidate(worker, 'timestamp-threshold', timestampThreshold),
+  ])).filter((item): item is TimestampCandidate => item !== null);
+  const timestampGroups = new Map<string, TimestampCandidate[]>();
+  for (const item of timestampCandidates) {
+    const key = item.capturedAt.toISOString();
+    timestampGroups.set(key, [...(timestampGroups.get(key) ?? []), item]);
+  }
+  const timestampAgreement = [...timestampGroups.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+  if (timestampAgreement.length < 2) {
+    return {
+      accepted: false as const,
+      reason: 'I passaggi OCR non concordano su data e ora visibili nello screenshot.',
+      validation: {
+        requiredMatchingPasses: 2,
+        timestampValidPasses: timestampCandidates.map((item) => item.pass),
+        fullOcrTextStored: false,
+      },
+    };
+  }
+  const capturedAt = timestampAgreement[0]!.capturedAt;
 
   await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
   const candidates = (await Promise.all([
@@ -162,9 +238,11 @@ async function recognize(worker: Worker, filePath: string, capturedAt: Date) {
     validation: {
       requiredMatchingPasses: 2,
       matchingPasses: agreement.map((item) => item.pass),
+      timestampMatchingPasses: timestampAgreement.map((item) => item.pass),
       confidences: agreement.map((item) => ({ pass: item.pass, confidence: item.confidence })),
       fullOcrTextStored: false,
     },
+    capturedAt,
   };
 }
 
@@ -220,7 +298,7 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
   const uploadDir = process.env.UPLOAD_DIR ?? path.resolve('storage/uploads');
   const filePath = path.resolve(uploadDir, upload.storageKey);
   if (!filePath.startsWith(path.resolve(uploadDir) + path.sep)) throw new Error('INVALID_STORAGE_KEY');
-  const [buffer, stat] = await Promise.all([fs.readFile(filePath), fs.stat(filePath)]);
+  const buffer = await fs.readFile(filePath);
   const imageSha256 = createHash('sha256').update(buffer).digest('hex');
   const duplicate = await AppDataSource.getRepository(UploadEntity)
     .createQueryBuilder('upload')
@@ -238,7 +316,7 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
     return;
   }
 
-  const result = await recognize(worker, filePath, stat.mtime);
+  const result = await recognize(worker, filePath);
   if (!result.accepted) {
     await AppDataSource.transaction(async (manager) => {
       await manager.update(UploadEntity, { id: upload.id }, {
@@ -262,7 +340,7 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
   await AppDataSource.transaction(async (manager) => {
     await manager.insert(UsageSnapshotEntity, {
       uploadId: upload.id,
-      capturedAt: stat.mtime,
+      capturedAt: result.capturedAt,
       ...result.usage,
       ocrConfidence: result.confidence,
       validation: result.validation,

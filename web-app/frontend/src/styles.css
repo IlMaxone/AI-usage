@@ -1,23 +1,29 @@
 :root {
-  color-scheme: dark;
-  --ink: #101714;
-  --night: #151d19;
-  --panel: #1d2722;
-  --panel-2: #222e28;
-  --line: #334039;
-  --muted: #95a49b;
-  --paper: #f0f0e9;
-  --lime: #b9f46a;
-  --lime-deep: #273c17;
-  --orange: #ffb672;
-  --red: #ff8c7f;
+  color-scheme: light;
+  --ink: #3f3027;
+  --night: #eee1c7;
+  --panel: #fff7e7;
+  --panel-2: #f3e6ca;
+  --line: #cdbb9b;
+  --muted: #8c6956;
+  --paper: #3f3027;
+  --lime: #d96d4b;
+  --lime-deep: #f6cbbb;
+  --orange: #b9583d;
+  --red: #a53e35;
   font-family: Inter, Aptos, 'Segoe UI', system-ui, sans-serif;
   background: var(--night);
-  color: var(--paper);
+  color: var(--ink);
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; min-height: 100%; background: var(--night); }
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background-color: var(--night);
+  background-image: radial-gradient(#b99c7c 1px, transparent 1px);
+  background-size: 20px 20px;
+}
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: wait; opacity: .55; }

@@ -14,6 +14,7 @@ export interface AiModel {
 }
 export interface UsageResult { status: 'MEASURED' | 'SEGMENT_MEASURED' | 'WAITING_FOR_OCR' | 'WINDOW_MISMATCH'; usedPct: number | null }
 export interface UsageSnapshot {
+  capturedAt: string;
   fiveHourRemainingPct: number; fiveHourUsedPct: number; fiveHourResetsAt: string;
   weeklyRemainingPct: number; weeklyUsedPct: number; weeklyResetsOn: string;
 }
@@ -33,9 +34,14 @@ export interface UsageRecord {
   single: Reading | null; start: Reading | null; end: Reading | null; usage: UsageResult;
 }
 export interface DashboardRecord {
-  id: string; mode: 'CONSTANT' | 'SEGMENT'; status: UsageRecord['status']; createdAt: string;
+  id: string; mode: 'CONSTANT' | 'SEGMENT'; status: UsageRecord['status']; createdAt: string; capturedAt: string | null;
   project: Project | null; model: Pick<AiModel, 'id'|'name'|'provider'|'reasoning'> | null;
   usage: UsageResult; calculated: { value: number; unit: string; ruleName: string } | null;
+}
+export interface GalleryUpload {
+  id: string; recordId: string | null; role: 'SINGLE' | 'START' | 'END'; originalName: string;
+  mime: string; size: number; status: Upload['status']; createdAt: string; capturedAt: string | null; recordDeleted: boolean;
+  project: Pick<Project, 'id' | 'name' | 'color'> | null;
 }
 export interface Dashboard {
   metrics: { records: number; measuredRecords: number; segments: number; usedPctSum: number; extraCreditsSpent: number; extraPaidEur: number };

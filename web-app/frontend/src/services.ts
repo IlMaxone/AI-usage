@@ -2,7 +2,7 @@ import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
 import { tap } from 'rxjs';
 import { API_URL } from './api-url';
-import { AiModel, AuthResponse, Dashboard, Project, UsageRecord, User } from './types';
+import { AiModel, AuthResponse, Dashboard, GalleryUpload, Project, UsageRecord, User } from './types';
 
 const TOKEN_KEY = 'ai-usage-token';
 const USER_KEY = 'ai-usage-user';
@@ -41,6 +41,8 @@ export class ApiService {
   updateProject(id: string, payload: { name: string; color: string }) { return this.http.patch<Project>(`${API_URL}/projects/${id}`, payload); }
   deleteProject(id: string) { return this.http.delete(`${API_URL}/projects/${id}`); }
   records() { return this.http.get<UsageRecord[]>(`${API_URL}/records`); }
+  gallery(projectId: string) { return this.http.get<GalleryUpload[]>(`${API_URL}/records/uploads/gallery`, { params: { projectId } }); }
+  uploadImage(uploadId: string) { return this.http.get(`${API_URL}/records/uploads/${uploadId}/content`, { responseType: 'blob' }); }
   createRecord(body: FormData) { return this.http.post<UsageRecord>(`${API_URL}/records`, body); }
   validateRecord(id: string) { return this.http.post(`${API_URL}/records/${id}/validate`, {}); }
   correctReading(recordId: string, uploadId: string, payload: object) {

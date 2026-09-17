@@ -2,11 +2,12 @@ import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
-import { forkJoin, switchMap, tap } from 'rxjs';
+import { forkJoin, map, of, switchMap, tap } from 'rxjs';
 import { ApiService, AuthService } from './services';
-import { AiModel, Dashboard, Project, Reading, UsageRecord } from './types';
+import { AiModel, Dashboard, GalleryUpload, Project, Reading, UsageRecord } from './types';
 
-type Tab = 'overview' | 'projects' | 'insert' | 'records' | 'models';
+type Tab = 'overview' | 'projects' | 'insert' | 'records' | 'analysis' | 'models';
+type AnalysisImage = GalleryUpload & { url: string };
 
 function localDateTime(value: Date | string = new Date()) {
   const date = new Date(value);
@@ -36,6 +37,11 @@ export class AppComponent implements OnDestroy {
   readonly correctionTarget = signal<{ recordId: string; uploadId: string; label: string } | null>(null);
   readonly selectedFiles = signal<Record<'single' | 'start' | 'end', { name: string; size: string } | null>>({ single: null, start: null, end: null });
   readonly uploadFeedback = signal('');
+  readonly analysisImages = signal<AnalysisImage[]>([]);
+  readonly analysisLoading = signal(false);
+  readonly analysisProjectId = signal('');
+  readonly selectedAnalysisImage = signal<AnalysisImage | null>(null);
+  readonly visibleAnalysisImages = computed(() => this.analysisImages());
   readonly activeValidations = computed(() => this.records().filter((item) => item.status === 'VALIDATING').length);
   private singleFile: File | null = null;
   private startFile: File | null = null;
@@ -106,8 +112,14 @@ export class AppComponent implements OnDestroy {
     if (this.auth.user()) this.refresh();
     this.poller = setInterval(() => { if (this.auth.user() && this.activeValidations()) this.refreshRecords(); }, 4000);
   }
-  ngOnDestroy() { clearInterval(this.poller); }
-  setTab(tab: Tab) { this.tab.set(tab); this.clearFeedback(); }
+  ngOnDestroy() { clearInterval(this.poller); this.releaseAnalysisImages(); }
+  setTab(tab: Tab) {
+    this.tab.set(tab); this.clearFeedback();
+    if (tab === 'analysis') {
+      this.analysisProjectId.set(this.analysisProjectId() || this.projects()[0]?.id || '');
+      this.loadAnalysisImages();
+    }
+  }
 
   submitAuth() {
     if (this.authForm.invalid) return;
@@ -116,7 +128,10 @@ export class AppComponent implements OnDestroy {
     const request = this.registerMode() ? this.auth.register(email, password, displayName) : this.auth.login(email, password);
     request.subscribe({ next: () => { this.loading.set(false); this.refresh(); }, error: (error) => this.fail(error) });
   }
-  logout() { this.auth.logout(); this.dashboard.set(null); this.projects.set([]); this.records.set([]); this.models.set([]); }
+  logout() {
+    this.releaseAnalysisImages(); this.auth.logout(); this.dashboard.set(null);
+    this.projects.set([]); this.records.set([]); this.models.set([]);
+  }
   refresh(preserveFeedback = false) {
     this.loading.set(true); if (!preserveFeedback) this.clearFeedback();
     forkJoin({ dashboard: this.api.dashboard(), projects: this.api.projects(), records: this.api.records(), models: this.api.models() }).subscribe({
@@ -276,6 +291,43 @@ export class AppComponent implements OnDestroy {
     return record.mode === 'CONSTANT'
       ? [{ value: record.single, label: 'Screenshot usage' }]
       : [{ value: record.start, label: 'Screenshot iniziale' }, { value: record.end, label: 'Screenshot finale' }];
+  }
+  recordCapturedAt(record: UsageRecord) {
+    const reading = record.mode === 'SEGMENT' ? record.end : record.single;
+    return reading?.rawSnapshot?.capturedAt ?? record.createdAt;
+  }
+  roleLabel(role: GalleryUpload['role']) {
+    return ({ SINGLE: 'Screenshot singolo', START: 'Inizio segmento', END: 'Fine segmento' } as const)[role];
+  }
+  loadAnalysisImages() {
+    const projectId = this.analysisProjectId();
+    if (!projectId) { this.releaseAnalysisImages(); this.analysisLoading.set(false); return; }
+    this.analysisLoading.set(true); this.selectedAnalysisImage.set(null);
+    this.api.gallery(projectId).pipe(
+      switchMap((items) => items.length
+        ? forkJoin(items.map((item) => this.api.uploadImage(item.id).pipe(
+            map((blob) => ({ ...item, url: URL.createObjectURL(blob) })),
+          )))
+        : of([] as AnalysisImage[])),
+    ).subscribe({
+      next: (items) => {
+        this.releaseAnalysisImages(); this.analysisImages.set(items); this.analysisLoading.set(false);
+      },
+      error: (error) => { this.analysisLoading.set(false); this.fail(error); },
+    });
+  }
+  selectAnalysisProject(projectId: string) {
+    this.analysisProjectId.set(projectId); this.loadAnalysisImages();
+  }
+  private releaseAnalysisImages() {
+    for (const item of this.analysisImages()) URL.revokeObjectURL(item.url);
+    this.analysisImages.set([]); this.selectedAnalysisImage.set(null);
+  }
+  tabTitle() {
+    return ({
+      overview: 'La scrivania', projects: 'I progetti', insert: 'Nuova lettura', records: 'Archivio usage',
+      analysis: 'Analisi immagini', models: 'Modelli e conti',
+    } as Record<Tab, string>)[this.tab()];
   }
   private refreshRecords() {
     this.api.records().subscribe((records) => {

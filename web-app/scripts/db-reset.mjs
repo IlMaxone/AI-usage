@@ -29,4 +29,4 @@ process.stdout.write(`Reset del solo volume database: ${databaseVolume}\n`);
 run('docker', ['compose', 'down']);
 run('docker', ['volume', 'rm', databaseVolume]);
 run('docker', ['compose', 'up', '-d']);
-process.stdout.write('Database ricreato e stack riavviato. Il volume uploads non è stato modificato.\n');
+process.stdout.write('Database ricreato e stack riavviato. La cartella storage/uploads non è stata modificata.\n');

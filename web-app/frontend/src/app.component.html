@@ -1,7 +1,7 @@
 @if (!auth.user()) {
   <main class="auth-shell">
     <section class="auth-story">
-      <div class="brand"><span class="brand-mark">A/</span><span>AI Usage</span></div>
+      <div class="brand"><span class="brand-mark">AI</span><span>The AI <em>Workbench</em></span></div>
       <div class="story-copy"><p class="eyebrow">PROJECT LEDGER · PRIVATE BY DESIGN</p><h1>Misura il lavoro.<br><em>Non le supposizioni.</em></h1><p class="lead">Attribuisci ogni finestra di utilizzo al progetto giusto, con screenshot verificati e calcoli trasparenti.</p></div>
       <div class="privacy-note"><span class="pulse"></span> OCR locale · testo completo mai archiviato</div>
     </section>
@@ -20,19 +20,21 @@
 } @else {
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">A/</span><span>AI Usage</span></div>
+      <div class="brand"><span class="brand-mark">AI</span><span>The AI <em>Workbench</em></span></div>
       <nav aria-label="Navigazione principale">
-        <button [class.active]="tab() === 'overview'" (click)="setTab('overview')"><span>⌁</span> Panoramica</button>
-        <button [class.active]="tab() === 'projects'" (click)="setTab('projects')"><span>▦</span> Progetti</button>
-        <button [class.active]="tab() === 'insert'" (click)="setTab('insert')"><span>↥</span> Inserimento</button>
-        <button [class.active]="tab() === 'records'" (click)="setTab('records')"><span>◫</span> Rilevazioni @if (activeValidations()) { <b>{{ activeValidations() }}</b> }</button>
-        <button [class.active]="tab() === 'models'" (click)="setTab('models')"><span>⌘</span> Modelli e calcoli</button>
+        <button [class.active]="tab() === 'overview'" (click)="setTab('overview')"><span>⌂</span> La scrivania</button>
+        <button [class.active]="tab() === 'projects'" (click)="setTab('projects')"><span>▦</span> I progetti</button>
+        <button [class.active]="tab() === 'insert'" (click)="setTab('insert')"><span>↥</span> Nuova lettura</button>
+        <button [class.active]="tab() === 'records'" (click)="setTab('records')"><span>☷</span> Archivio usage @if (activeValidations()) { <b>{{ activeValidations() }}</b> }</button>
+        <button [class.active]="tab() === 'analysis'" (click)="setTab('analysis')"><span>▧</span> Analisi immagini</button>
+        <button [class.active]="tab() === 'models'" (click)="setTab('models')"><span>⚙</span> Modelli e conti</button>
       </nav>
+      <div class="privacy-stamp">OCR LOCALE<br>DATI PRIVATI<br>✓ VERIFICATO</div>
       <div class="sidebar-foot"><div class="avatar">{{ auth.user()!.displayName.slice(0, 1).toUpperCase() }}</div><div><strong>{{ auth.user()!.displayName }}</strong><small>{{ auth.user()!.email }}</small></div><button class="logout" title="Esci" (click)="logout()">↗</button></div>
     </aside>
 
     <main class="workspace">
-      <header class="topbar"><div><p class="eyebrow">USAGE ANALYTICS</p><h1>{{ tab() === 'overview' ? 'Panoramica' : tab() === 'projects' ? 'Gestione progetti' : tab() === 'insert' ? 'Nuova rilevazione' : tab() === 'records' ? 'Rilevazioni' : 'Modelli e calcoli' }}</h1></div><button class="secondary" (click)="refresh()" [disabled]="loading()">{{ loading() ? 'Aggiorno…' : 'Aggiorna dati' }}</button></header>
+      <header class="topbar"><div><p class="eyebrow">IL TUO QUADERNO OPERATIVO</p><h1>{{ tabTitle() }}</h1></div><button class="secondary" (click)="tab() === 'analysis' ? loadAnalysisImages() : refresh()" [disabled]="loading() || analysisLoading()">{{ loading() || analysisLoading() ? 'Aggiorno…' : 'Aggiorna dati' }}</button></header>
       @if (message()) { <p class="alert success">{{ message() }}</p> }
       @if (error()) { <p class="alert error">{{ error() }}</p> }
 
@@ -47,7 +49,7 @@
             <article class="panel span-two"><div class="panel-head"><div><p class="eyebrow">ULTIME RILEVAZIONI</p><h2>I dati parlano da soli</h2></div><button class="text-button" (click)="setTab('insert')">Nuovo inserimento →</button></div>
               <div class="table-wrap"><table><thead><tr><th>Data</th><th>Progetto</th><th>Tipo</th><th>Modello</th><th>Usage 5h</th><th>Calcolo</th></tr></thead><tbody>
                 @for (item of data.recentRecords; track item.id) {
-                  <tr><td>{{ item.createdAt | date:'dd MMM, HH:mm' }}</td><td><span class="project-dot" [style.background]="item.project?.color"></span>{{ item.project?.name || 'Progetto eliminato' }}</td><td>{{ item.mode === 'CONSTANT' ? 'Usage costante' : 'Segmento di usage' }}</td><td>{{ item.model?.name || '—' }}<small>{{ item.model?.reasoning }}</small></td><td><span class="status" [class.warn]="item.usage.usedPct === null">{{ statusLabel(item.usage.status) }}</span><strong class="usage">{{ item.usage.usedPct === null ? '—' : (item.usage.usedPct | number:'1.0-2') + '%' }}</strong></td><td>{{ item.calculated ? ((item.calculated.value | number:'1.0-2') + ' ' + item.calculated.unit) : '—' }}</td></tr>
+                  <tr><td>{{ (item.capturedAt || item.createdAt) | date:'dd MMM, HH:mm:ss' }}</td><td><span class="project-dot" [style.background]="item.project?.color"></span>{{ item.project?.name || 'Progetto eliminato' }}</td><td>{{ item.mode === 'CONSTANT' ? 'Usage costante' : 'Segmento di usage' }}</td><td>{{ item.model?.name || '—' }}<small>{{ item.model?.reasoning }}</small></td><td><span class="status" [class.warn]="item.usage.usedPct === null">{{ statusLabel(item.usage.status) }}</span><strong class="usage">{{ item.usage.usedPct === null ? '—' : (item.usage.usedPct | number:'1.0-2') + '%' }}</strong></td><td>{{ item.calculated ? ((item.calculated.value | number:'1.0-2') + ' ' + item.calculated.unit) : '—' }}</td></tr>
                 } @empty { <tr><td colspan="6" class="empty">Nessuna rilevazione. Crea un progetto e inserisci il primo screenshot.</td></tr> }
               </tbody></table></div>
             </article>
@@ -93,7 +95,7 @@
               <button class="primary validate-button" type="submit" [disabled]="loading() || recordForm.invalid || !projects().length"><span>✓</span><strong>Avvia convalida</strong><small>3 letture OCR · almeno 2 devono concordare</small></button>
             </form>
           </article>
-          <article class="panel explainer"><p class="eyebrow">COME FUNZIONA</p><h2>Due modalità, nessun evento</h2><div class="explain-step"><b>01</b><div><strong>Usage costante</strong><p>Salva direttamente la percentuale usata mostrata da un singolo screenshot.</p></div></div><div class="explain-step"><b>02</b><div><strong>Segmento di usage</strong><p>Calcola il delta tra screenshot finale e iniziale, soltanto se il reset 5h coincide.</p></div></div><div class="explain-step"><b>03</b><div><strong>Tripla verifica OCR</strong><p>Originale, normalizzata e alto contrasto. La lettura passa con almeno due risultati concordanti.</p></div></div><div class="explain-step"><b>04</b><div><strong>Correzione tracciata</strong><p>Puoi rettificare i valori dalla pagina Rilevazioni senza cancellare l’OCR originale.</p></div></div></article>
+          <article class="panel explainer"><p class="eyebrow">COME FUNZIONA</p><h2>Due modalità, nessun evento</h2><div class="explain-step"><b>01</b><div><strong>Usage costante</strong><p>Salva direttamente la percentuale usata mostrata da un singolo screenshot.</p></div></div><div class="explain-step"><b>02</b><div><strong>Segmento di usage</strong><p>Calcola il delta tra screenshot finale e iniziale, soltanto se il reset 5h coincide.</p></div></div><div class="explain-step"><b>03</b><div><strong>Tripla verifica OCR</strong><p>Tre letture mirate devono concordare sia sui valori sia sulla data e ora visibili nello screenshot.</p></div></div><div class="explain-step"><b>04</b><div><strong>Correzione tracciata</strong><p>Puoi rettificare i valori dalla pagina Rilevazioni senza cancellare l’OCR originale.</p></div></div></article>
         </section>
       }
 
@@ -101,7 +103,7 @@
         <section class="records-layout">
           <div class="record-list">
             @for (record of records(); track record.id) {
-              <article class="panel record-card"><div class="record-head"><div><span class="project-dot large" [style.background]="record.project?.color"></span><p class="eyebrow">{{ record.project?.name || 'PROGETTO ELIMINATO' }}</p><h2>{{ record.mode === 'CONSTANT' ? 'Usage costante' : 'Segmento di usage' }}</h2><small>{{ record.createdAt | date:'dd MMM yyyy, HH:mm' }} · {{ record.model?.name }} {{ record.model?.reasoning }}</small></div><div class="record-result"><span class="status" [class.warn]="record.status === 'MANUAL_REVIEW' || record.status === 'FAILED'">{{ statusLabel(record.status) }}</span><strong>{{ record.usage.usedPct === null ? '—' : (record.usage.usedPct | number:'1.0-2') + '%' }}</strong></div></div>
+              <article class="panel record-card"><div class="record-head"><div><span class="project-dot large" [style.background]="record.project?.color"></span><p class="eyebrow">{{ record.project?.name || 'PROGETTO ELIMINATO' }}</p><h2>{{ record.mode === 'CONSTANT' ? 'Usage costante' : 'Segmento di usage' }}</h2><small>{{ recordCapturedAt(record) | date:'dd MMM yyyy, HH:mm:ss' }} · {{ record.model?.name }} {{ record.model?.reasoning }}</small></div><div class="record-result"><span class="status" [class.warn]="record.status === 'MANUAL_REVIEW' || record.status === 'FAILED'">{{ statusLabel(record.status) }}</span><strong>{{ record.usage.usedPct === null ? '—' : (record.usage.usedPct | number:'1.0-2') + '%' }}</strong></div></div>
                 <div class="reading-grid" [class.two]="record.mode === 'SEGMENT'">
                   @for (reading of readings(record); track reading.label) { @if (reading.value; as value) {
                     <div class="reading"><div><strong>{{ reading.label }}</strong><small>{{ value.upload?.originalName }}</small></div><span class="status" [class.warn]="value.upload?.status === 'MANUAL_REVIEW' || value.upload?.status === 'FAILED'">{{ uploadStatus(value.upload?.status || '') }}</span><div class="reading-values"><span>5h residuo <b>{{ value.effectiveSnapshot ? (value.effectiveSnapshot.fiveHourRemainingPct | number:'1.0-2') + '%' : '—' }}</b></span><span>Reset <b>{{ value.effectiveSnapshot ? (value.effectiveSnapshot.fiveHourResetsAt | date:'HH:mm') : '—' }}</b></span></div>@if (value.correction) { <small class="manual-note">Valore corretto manualmente</small> } @if (value.upload?.reviewReason) { <small class="review">{{ value.upload?.reviewReason }}</small> }<button class="text-button" (click)="openCorrection(record.id, value, reading.label)">Correggi valori</button></div>
@@ -116,6 +118,30 @@
             <aside class="panel correction-panel"><p class="eyebrow">CORREZIONE MANUALE</p><h2>{{ target.label }}</h2><p class="muted">La lettura OCR originale resta immutata. Questa rettifica diventa il valore effettivo e resta tracciata.</p><form class="stack-form" [formGroup]="correctionForm" (ngSubmit)="saveCorrection()"><label>Residuo 5h %<input type="number" min="0" max="100" step="0.01" formControlName="fiveHourRemainingPct"></label><label>Reset 5h<input type="datetime-local" formControlName="fiveHourResetsAt"></label><label>Residuo settimanale %<input type="number" min="0" max="100" step="0.01" formControlName="weeklyRemainingPct"></label><label>Reset settimanale<input type="date" formControlName="weeklyResetsOn"></label><label>Motivo della correzione<textarea rows="3" formControlName="reason"></textarea></label><button class="primary" type="submit" [disabled]="correctionForm.invalid">Registra correzione</button><button class="secondary" type="button" (click)="correctionTarget.set(null)">Annulla</button></form></aside>
           }
         </section>
+      }
+
+      @if (tab() === 'analysis') {
+        <section class="analysis-toolbar panel">
+          <div><p class="eyebrow">CARTELLA SCREENSHOT</p><h2>{{ visibleAnalysisImages().length }} immagini disponibili</h2><p>File letti dalla cartella locale documentata e mostrati soltanto al proprietario autenticato.</p></div>
+          <label>Progetto da analizzare<select [value]="analysisProjectId()" (change)="selectAnalysisProject($any($event.target).value)">@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
+        </section>
+        @if (analysisLoading()) { <div class="panel empty">Preparo le anteprime dalla cartella locale…</div> }
+        @else {
+          <section class="analysis-grid">
+            @for (item of visibleAnalysisImages(); track item.id) {
+              <article class="analysis-card" (click)="selectedAnalysisImage.set(item)" tabindex="0" (keydown.enter)="selectedAnalysisImage.set(item)">
+                <div class="analysis-preview"><img [src]="item.url" [alt]="'Screenshot ' + roleLabel(item.role)" loading="lazy"><span class="status" [class.warn]="item.status === 'MANUAL_REVIEW' || item.status === 'FAILED'">{{ uploadStatus(item.status) }}</span></div>
+                <div class="analysis-copy"><span class="project-dot" [style.background]="item.project?.color"></span><div><strong>{{ item.project?.name || 'Progetto eliminato' }}</strong><small>{{ roleLabel(item.role) }} · {{ (item.capturedAt || item.createdAt) | date:'dd MMM yyyy, HH:mm:ss' }}</small><small>{{ item.originalName }} · {{ item.size / 1048576 | number:'1.2-2' }} MB</small></div></div>
+              </article>
+            } @empty { <div class="panel empty">Nessuno screenshot presente per questo progetto.</div> }
+          </section>
+        }
+        @if (selectedAnalysisImage(); as item) {
+          <div class="image-lightbox" role="dialog" aria-modal="true" (click)="selectedAnalysisImage.set(null)">
+            <button aria-label="Chiudi anteprima" (click)="selectedAnalysisImage.set(null)">×</button>
+            <figure (click)="$event.stopPropagation()"><img [src]="item.url" [alt]="item.originalName"><figcaption><strong>{{ item.project?.name || 'Progetto eliminato' }}</strong><span>{{ roleLabel(item.role) }} · {{ item.originalName }}</span></figcaption></figure>
+          </div>
+        }
       }
 
       @if (tab() === 'models') {

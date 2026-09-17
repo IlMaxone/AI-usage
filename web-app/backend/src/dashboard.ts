@@ -8,6 +8,7 @@ import { AuthUser, CurrentUser } from './common';
 import {
   AiModelEntity,
   BillingCalibrationEntity,
+  CaptureTimeObservationEntity,
   CalculationRuleEntity,
   ExtraCreditPurchaseEntity,
   ProjectEntity,
@@ -37,6 +38,7 @@ export class DashboardController {
     @InjectRepository(UsageSnapshotEntity) private readonly snapshots: Repository<UsageSnapshotEntity>,
     @InjectRepository(ExtraCreditPurchaseEntity) private readonly purchases: Repository<ExtraCreditPurchaseEntity>,
     @InjectRepository(BillingCalibrationEntity) private readonly calibrations: Repository<BillingCalibrationEntity>,
+    @InjectRepository(CaptureTimeObservationEntity) private readonly captureTimes: Repository<CaptureTimeObservationEntity>,
     private readonly formulas: FormulaService,
   ) {}
 
@@ -52,13 +54,14 @@ export class DashboardController {
       .flatMap((item) => [item.singleUploadId, item.startUploadId, item.endUploadId])
       .filter((id): id is string => Boolean(id));
     const modelIds = [...new Set(records.map((item) => item.modelId))];
-    const [uploads, snapshots, corrections, models, rules] = await Promise.all([
+    const [uploads, snapshots, corrections, captureTimes, models, rules] = await Promise.all([
       uploadIds.length ? this.uploads.find({ where: { id: In(uploadIds), ownerId: user.id } }) : [],
       uploadIds.length ? this.snapshots.find({ where: { uploadId: In(uploadIds) } }) : [],
       uploadIds.length ? this.corrections.find({
         where: { uploadId: In(uploadIds), ownerId: user.id },
         order: { createdAt: 'DESC' },
       }) : [],
+      uploadIds.length ? this.captureTimes.find({ where: { uploadId: In(uploadIds), ownerId: user.id }, order: { createdAt: 'DESC' } }) : [],
       modelIds.length ? this.models.find({ where: { id: In(modelIds), ownerId: user.id }, withDeleted: true }) : [],
       modelIds.length ? this.rules.find({
         where: { modelId: In(modelIds), ownerId: user.id, isDefault: true, supersededAt: IsNull() },
@@ -69,6 +72,8 @@ export class DashboardController {
     const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
     const correctionByUpload = new Map<string, UsageCorrectionEntity>();
     for (const item of corrections) if (!correctionByUpload.has(item.uploadId)) correctionByUpload.set(item.uploadId, item);
+    const captureTimeByUpload = new Map<string, CaptureTimeObservationEntity>();
+    for (const item of captureTimes) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
     const effective = (uploadId: string | null) => uploadId
       ? correctionByUpload.get(uploadId) ?? snapshotByUpload.get(uploadId)
       : undefined;
@@ -82,6 +87,10 @@ export class DashboardController {
       const single = effective(record.singleUploadId);
       const start = effective(record.startUploadId);
       const end = effective(record.endUploadId);
+      const captureUploadId = record.mode === 'SEGMENT' ? record.endUploadId : record.singleUploadId;
+      const capturedAt = captureUploadId
+        ? captureTimeByUpload.get(captureUploadId)?.capturedAt ?? snapshotByUpload.get(captureUploadId)?.capturedAt
+        : undefined;
       const usage = computeRecordUsage(record.mode, single, start, end);
       const model = modelById.get(record.modelId);
       const rule = ruleByModel.get(record.modelId);
@@ -111,6 +120,7 @@ export class DashboardController {
         mode: record.mode,
         status: record.status,
         createdAt: record.createdAt,
+        capturedAt: capturedAt ?? null,
         note: record.note,
         project: projectById.get(record.projectId) ?? null,
         model: model ? { id: model.id, name: model.name, provider: model.provider, reasoning: model.reasoning } : null,
@@ -143,7 +153,10 @@ export class DashboardController {
           .filter((item) => item.project?.id === project.id)
           .reduce((sum, item) => sum + (item.usage.usedPct ?? 0), 0),
       })),
-      recentRecords: items.slice(0, 20),
+      recentRecords: items
+        .slice()
+        .sort((left, right) => new Date(right.capturedAt ?? right.createdAt).getTime() - new Date(left.capturedAt ?? left.createdAt).getTime())
+        .slice(0, 20),
     };
   }
 }
