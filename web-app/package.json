@@ -1,0 +1,11 @@
+{
+  "name": "ai-usage-web-stack",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "mockups": "node scripts/mockups-server.mjs",
+    "db:backup": "node scripts/db-backup.mjs",
+    "db:reset": "node scripts/db-reset.mjs",
+    "db:reset:with-backup": "node scripts/db-reset.mjs --backup"
+  }
+}

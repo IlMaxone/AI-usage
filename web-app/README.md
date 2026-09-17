@@ -86,3 +86,35 @@ docker compose ps
 
 Il backend include test unitari del motore formule e del calcolo delta; il
 frontend include la compilazione TypeScript in modalità strict.
+
+## Backup e reset database via npm
+
+Eseguire i comandi dalla cartella `web-app`. I dump vengono salvati in
+`web-app/backups/`, cartella esclusa da Git.
+
+```powershell
+# Crea un dump SQL senza fermare lo stack
+npm run db:backup
+
+# Elimina esclusivamente il volume PostgreSQL e riavvia Compose
+npm run db:reset
+
+# Crea prima il dump SQL, poi azzera il database
+npm run db:reset:with-backup
+```
+
+Il reset verifica il nome esatto `ai-usage-web_postgres-data` prima di
+eliminarlo. Il volume `ai-usage-web_uploads`, che contiene le immagini, non
+viene rimosso.
+
+## Mockup grafici
+
+Le cinque proposte HTML autonome sono in `web-app/mockups`. Per aprire la
+galleria locale:
+
+```powershell
+npm run mockups
+```
+
+Poi visitare `http://localhost:4450`. Il server ascolta soltanto su
+`127.0.0.1` e non espone i mockup in rete.

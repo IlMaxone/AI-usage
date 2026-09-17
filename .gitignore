@@ -11,6 +11,7 @@ web-app/**/node_modules/
 web-app/**/dist/
 web-app/**/.angular/
 web-app/storage/
+web-app/backups/
 
 projects/*
 !projects/demo/
