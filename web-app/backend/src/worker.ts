@@ -106,25 +106,39 @@ async function candidate(worker: Worker, pass: string, input: string | Buffer, c
 
 async function recognize(worker: Worker, filePath: string, capturedAt: Date) {
   const originalBuffer = await fs.readFile(filePath);
-  const prepared = await sharp(originalBuffer)
-    .resize({ width: 1800, withoutEnlargement: false, fit: 'inside' })
-    .grayscale()
-    .normalize()
-    .sharpen()
-    .png()
-    .toBuffer();
-  const highContrast = await sharp(originalBuffer)
-    .resize({ width: 2200, withoutEnlargement: false, fit: 'inside' })
-    .grayscale()
-    .threshold(170)
-    .png()
-    .toBuffer();
+  const metadata = await sharp(originalBuffer).metadata();
+  if (!metadata.width || !metadata.height) throw new Error('IMAGE_DIMENSIONS_UNREADABLE');
+  // Nei normali screenshot desktop il pannello usage occupa circa il 20% a sinistra.
+  // Il ritaglio rimuove il testo estraneo che altera l'ordine OCR; sulle immagini
+  // strette viene mantenuta l'intera larghezza.
+  const regionWidth = metadata.width >= 900
+    ? Math.min(metadata.width, Math.max(360, Math.round(metadata.width * 0.2)))
+    : metadata.width;
+  const usageRegion = { left: 0, top: 0, width: regionWidth, height: metadata.height };
+  const [cropNormalized, cropSoft] = await Promise.all([
+    sharp(originalBuffer)
+      .extract(usageRegion)
+      .resize({ width: 1800, withoutEnlargement: false, fit: 'inside' })
+      .grayscale()
+      .normalize()
+      .sharpen()
+      .png()
+      .toBuffer(),
+    sharp(originalBuffer)
+      .extract(usageRegion)
+      .resize({ width: 1800, withoutEnlargement: false, fit: 'inside' })
+      .grayscale()
+      .linear(1.25, 8)
+      .sharpen()
+      .png()
+      .toBuffer(),
+  ]);
 
   await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
   const candidates = (await Promise.all([
-    candidate(worker, 'original', filePath, capturedAt),
-    candidate(worker, 'normalized', prepared, capturedAt),
-    candidate(worker, 'high-contrast', highContrast, capturedAt),
+    candidate(worker, 'original', originalBuffer, capturedAt),
+    candidate(worker, 'crop-normalized', cropNormalized, capturedAt),
+    candidate(worker, 'crop-soft', cropSoft, capturedAt),
   ])).filter((item): item is Candidate => item !== null);
 
   const groups = new Map<string, Candidate[]>();
