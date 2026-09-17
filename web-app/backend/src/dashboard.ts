@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsDateString, IsInt, IsNumber, Min } from 'class-validator';
 import { In, IsNull, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
+import { deriveCalibration } from './calibration';
 import { AuthUser, CurrentUser } from './common';
 import {
   AiModelEntity,
@@ -10,12 +11,13 @@ import {
   CalculationRuleEntity,
   ExtraCreditPurchaseEntity,
   ProjectEntity,
-  UsageEventEntity,
+  UploadEntity,
+  UsageCorrectionEntity,
+  UsageRecordEntity,
   UsageSnapshotEntity,
 } from './entities';
-import { computeEventUsage } from './events';
 import { FormulaService } from './formula';
-import { deriveCalibration } from './calibration';
+import { computeRecordUsage } from './records';
 
 class ExtraCreditsDto {
   @IsInt() @Min(1) credits!: number;
@@ -26,7 +28,9 @@ class ExtraCreditsDto {
 @Controller('dashboard')
 export class DashboardController {
   constructor(
-    @InjectRepository(UsageEventEntity) private readonly events: Repository<UsageEventEntity>,
+    @InjectRepository(UsageRecordEntity) private readonly records: Repository<UsageRecordEntity>,
+    @InjectRepository(UploadEntity) private readonly uploads: Repository<UploadEntity>,
+    @InjectRepository(UsageCorrectionEntity) private readonly corrections: Repository<UsageCorrectionEntity>,
     @InjectRepository(ProjectEntity) private readonly projects: Repository<ProjectEntity>,
     @InjectRepository(AiModelEntity) private readonly models: Repository<AiModelEntity>,
     @InjectRepository(CalculationRuleEntity) private readonly rules: Repository<CalculationRuleEntity>,
@@ -38,36 +42,50 @@ export class DashboardController {
 
   @Get()
   async summary(@CurrentUser() user: AuthUser) {
-    const [events, projects, purchases, calibrations] = await Promise.all([
-      this.events.find({ where: { ownerId: user.id }, order: { startsAt: 'DESC' } }),
+    const [records, projects, purchases, calibrations] = await Promise.all([
+      this.records.find({ where: { ownerId: user.id }, order: { createdAt: 'DESC' } }),
       this.projects.find({ where: { ownerId: user.id }, order: { name: 'ASC' } }),
       this.purchases.find({ where: { ownerId: user.id }, order: { purchasedAt: 'DESC' } }),
       this.calibrations.find({ where: { ownerId: user.id }, order: { recordedAt: 'DESC' } }),
     ]);
-    const uploadIds = events.flatMap((item) => [item.startUploadId, item.endUploadId]).filter((id): id is string => Boolean(id));
-    const modelIds = [...new Set(events.map((item) => item.modelId))];
-    const [snapshots, models, rules] = await Promise.all([
+    const uploadIds = records
+      .flatMap((item) => [item.singleUploadId, item.startUploadId, item.endUploadId])
+      .filter((id): id is string => Boolean(id));
+    const modelIds = [...new Set(records.map((item) => item.modelId))];
+    const [uploads, snapshots, corrections, models, rules] = await Promise.all([
+      uploadIds.length ? this.uploads.find({ where: { id: In(uploadIds), ownerId: user.id } }) : [],
       uploadIds.length ? this.snapshots.find({ where: { uploadId: In(uploadIds) } }) : [],
+      uploadIds.length ? this.corrections.find({
+        where: { uploadId: In(uploadIds), ownerId: user.id },
+        order: { createdAt: 'DESC' },
+      }) : [],
       modelIds.length ? this.models.find({ where: { id: In(modelIds), ownerId: user.id }, withDeleted: true }) : [],
       modelIds.length ? this.rules.find({
         where: { modelId: In(modelIds), ownerId: user.id, isDefault: true, supersededAt: IsNull() },
         order: { createdAt: 'ASC' },
       }) : [],
     ]);
+    const uploadById = new Map(uploads.map((item) => [item.id, item]));
     const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
+    const correctionByUpload = new Map<string, UsageCorrectionEntity>();
+    for (const item of corrections) if (!correctionByUpload.has(item.uploadId)) correctionByUpload.set(item.uploadId, item);
+    const effective = (uploadId: string | null) => uploadId
+      ? correctionByUpload.get(uploadId) ?? snapshotByUpload.get(uploadId)
+      : undefined;
     const modelById = new Map(models.map((item) => [item.id, item]));
     const ruleByModel = new Map(rules.map((item) => [item.modelId, item]));
     const projectById = new Map(projects.map((item) => [item.id, item]));
     const calibrationByModel = new Map<string, BillingCalibrationEntity>();
     for (const item of calibrations) if (!calibrationByModel.has(item.modelId)) calibrationByModel.set(item.modelId, item);
 
-    const items = events.map((event) => {
-      const start = event.startUploadId ? snapshotByUpload.get(event.startUploadId) : undefined;
-      const end = event.endUploadId ? snapshotByUpload.get(event.endUploadId) : undefined;
-      const usage = computeEventUsage(start, end);
-      const model = modelById.get(event.modelId);
-      const rule = ruleByModel.get(event.modelId);
-      const rawCalibration = calibrationByModel.get(event.modelId);
+    const items = records.map((record) => {
+      const single = effective(record.singleUploadId);
+      const start = effective(record.startUploadId);
+      const end = effective(record.endUploadId);
+      const usage = computeRecordUsage(record.mode, single, start, end);
+      const model = modelById.get(record.modelId);
+      const rule = ruleByModel.get(record.modelId);
+      const rawCalibration = calibrationByModel.get(record.modelId);
       let calculated: { value: number; unit: string; ruleName: string } | null = null;
       if (usage.usedPct !== null && model && rule) {
         try {
@@ -89,12 +107,18 @@ export class DashboardController {
         }
       }
       return {
-        id: event.id,
-        title: event.title,
-        startsAt: event.startsAt,
-        endsAt: event.endsAt,
-        project: projectById.get(event.projectId) ?? null,
+        id: record.id,
+        mode: record.mode,
+        status: record.status,
+        createdAt: record.createdAt,
+        note: record.note,
+        project: projectById.get(record.projectId) ?? null,
         model: model ? { id: model.id, name: model.name, provider: model.provider, reasoning: model.reasoning } : null,
+        uploads: [record.singleUploadId, record.startUploadId, record.endUploadId]
+          .filter((id): id is string => Boolean(id))
+          .map((id) => uploadById.get(id))
+          .filter(Boolean)
+          .map((upload) => ({ id: upload!.id, role: upload!.role, status: upload!.status })),
         usage,
         calculated,
       };
@@ -102,25 +126,24 @@ export class DashboardController {
 
     const extraCredits = purchases.reduce((sum, item) => sum + Number(item.credits), 0);
     const extraPaidEur = purchases.reduce((sum, item) => sum + Number(item.paidEur), 0);
-    const paired = items.filter((item) => item.usage.status === 'PAIRED').length;
     const measured = items.filter((item) => item.usage.usedPct !== null);
     return {
       metrics: {
-        events: events.length,
-        measuredEvents: measured.length,
-        pairedEvents: paired,
+        records: records.length,
+        measuredRecords: measured.length,
+        segments: items.filter((item) => item.mode === 'SEGMENT').length,
         usedPctSum: measured.reduce((sum, item) => sum + (item.usage.usedPct ?? 0), 0),
         extraCreditsSpent: extraCredits,
         extraPaidEur: Math.round(extraPaidEur * 100) / 100,
       },
       projects: projects.map((project) => ({
         ...project,
-        eventCount: items.filter((item) => item.project?.id === project.id).length,
+        recordCount: items.filter((item) => item.project?.id === project.id).length,
         usedPctSum: items
           .filter((item) => item.project?.id === project.id)
           .reduce((sum, item) => sum + (item.usage.usedPct ?? 0), 0),
       })),
-      recentEvents: items.slice(0, 20),
+      recentRecords: items.slice(0, 20),
     };
   }
 }

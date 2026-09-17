@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { ENTITIES } from './entities';
 import { InitialSchema1726500000000 } from './migrations/1726500000000-initial-schema';
+import { UsageRecords1726500000001 } from './migrations/1726500000001-usage-records';
 
 export function databaseOptions(migrationsRun = false) {
   const url = process.env.DATABASE_URL;
@@ -10,7 +11,7 @@ export function databaseOptions(migrationsRun = false) {
     type: 'postgres' as const,
     url,
     entities: ENTITIES,
-    migrations: [InitialSchema1726500000000],
+    migrations: [InitialSchema1726500000000, UsageRecords1726500000001],
     migrationsRun,
     synchronize: false,
     ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: true } : false,

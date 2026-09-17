@@ -33,20 +33,25 @@ predefinito `GPT-5.6 Sol` e reasoning `high`.
 
 ## Flusso dati
 
-1. L'utente crea un progetto e, facoltativamente, un evento di lavoro.
-2. Carica uno screenshot come rilevazione singola, `inizio` o `fine` e lo
-   associa al progetto/evento.
-3. Il worker calcola SHA-256 ed esegue più letture OCR locali. Una rilevazione
+1. L'utente crea, modifica o elimina liberamente i progetti dalla pagina dedicata.
+2. Dalla pagina Inserimento sceglie `Usage costante` con un solo screenshot,
+   oppure `Segmento di usage` con screenshot iniziale e finale.
+3. Il pulsante `Avvia convalida` mette gli screenshot in coda. Il worker calcola
+   SHA-256 ed esegue tre letture OCR locali: originale, normalizzata e ad alto
+   contrasto. Una rilevazione
    è validata solo se almeno due passaggi concordano su percentuali e reset.
 4. In caso di disaccordo l'immagine resta in `manual_review`; non viene creato
    alcuno snapshot di utilizzo e non viene salvato il testo OCR completo.
-5. Una coppia inizio/fine valida nella stessa finestra di 5 ore attribuisce al
-   progetto il delta tra le due percentuali. Senza screenshot iniziale viene
-   mantenuto il calcolo storico basato sul valore dello screenshot finale.
+5. Un singolo screenshot conserva l'usage corrente. Una coppia inizio/fine
+   valida nella stessa finestra di 5 ore attribuisce al progetto il delta tra
+   le due percentuali; reset differenti richiedono correzione manuale.
+6. I valori possono essere corretti dalla UI. La correzione è append-only e
+   non sovrascrive lo snapshot OCR originale. La rilevazione può essere rimossa
+   dalla vista mantenendo audit e dati tecnici tracciabili.
 
 ## Integrità e privacy
 
-- eventi e configurazioni sono cancellati logicamente e restano nell'audit;
+- progetti e rilevazioni sono cancellati logicamente e restano nell'audit;
 - modelli e formule vengono revisionati: una modifica crea una nuova versione;
 - osservazioni di fatturazione e acquisti extra sono append-only; i valori
   calibrati vengono derivati dal motore e non salvati come importi osservati;

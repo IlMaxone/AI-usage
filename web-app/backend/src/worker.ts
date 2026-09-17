@@ -5,7 +5,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { createWorker, PSM, Worker } from 'tesseract.js';
 import { AppDataSource } from './database';
-import { AuditEventEntity, UploadEntity, UsageSnapshotEntity } from './entities';
+import { AuditEventEntity, UploadEntity, UsageRecordEntity, UsageRecordStatus, UsageSnapshotEntity } from './entities';
 
 interface ParsedUsage {
   fiveHourRemainingPct: number;
@@ -170,6 +170,38 @@ async function claimUpload(): Promise<UploadEntity | null> {
   });
 }
 
+async function refreshRecordStatus(recordId: string | null): Promise<void> {
+  if (!recordId) return;
+  const records = AppDataSource.getRepository(UsageRecordEntity);
+  const record = await records.findOneBy({ id: recordId });
+  if (!record) return;
+  const requiredIds = [record.singleUploadId, record.startUploadId, record.endUploadId]
+    .filter((id): id is string => Boolean(id));
+  const uploads = await AppDataSource.getRepository(UploadEntity)
+    .createQueryBuilder('upload')
+    .where('upload.id IN (:...ids)', { ids: requiredIds })
+    .getMany();
+  let status: UsageRecordStatus = 'VALIDATING';
+  if (uploads.some((item) => item.status === 'FAILED')) status = 'FAILED';
+  else if (uploads.some((item) => item.status === 'MANUAL_REVIEW')) status = 'MANUAL_REVIEW';
+  else if (uploads.length === requiredIds.length && uploads.every((item) => item.status === 'VALIDATED')) {
+    status = 'VALIDATED';
+    if (record.mode === 'SEGMENT' && record.startUploadId && record.endUploadId) {
+      const snapshots = await AppDataSource.getRepository(UsageSnapshotEntity)
+        .createQueryBuilder('snapshot')
+        .where('snapshot.upload_id IN (:...ids)', { ids: [record.startUploadId, record.endUploadId] })
+        .getMany();
+      const byUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
+      const start = byUpload.get(record.startUploadId);
+      const end = byUpload.get(record.endUploadId);
+      if (start && end && start.fiveHourResetsAt.getTime() !== end.fiveHourResetsAt.getTime()) {
+        status = 'MANUAL_REVIEW';
+      }
+    }
+  }
+  await records.update(recordId, { status });
+}
+
 async function processUpload(worker: Worker, upload: UploadEntity): Promise<void> {
   const uploadDir = process.env.UPLOAD_DIR ?? path.resolve('storage/uploads');
   const filePath = path.resolve(uploadDir, upload.storageKey);
@@ -188,6 +220,7 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
       reviewReason: 'Immagine già registrata; nessun nuovo snapshot creato.',
       processedAt: new Date(),
     });
+    await refreshRecordStatus(upload.recordId);
     return;
   }
 
@@ -208,6 +241,7 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
         metadata: result.validation,
       });
     });
+    await refreshRecordStatus(upload.recordId);
     return;
   }
 
@@ -233,6 +267,7 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
       metadata: { matchingPasses: result.validation.matchingPasses, fullOcrTextStored: false },
     });
   });
+  await refreshRecordStatus(upload.recordId);
 }
 
 async function main() {
@@ -261,6 +296,7 @@ async function main() {
           reviewReason: message.slice(0, 500),
           processedAt: new Date(),
         });
+        await refreshRecordStatus(upload.recordId);
       }
     }
   } finally {

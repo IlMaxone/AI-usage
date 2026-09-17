@@ -9,12 +9,11 @@ import { AuthController, JwtAuthGuard, JwtStrategy } from './auth';
 import { databaseOptions } from './database';
 import { DashboardController, ExtraCreditsController } from './dashboard';
 import { ENTITIES } from './entities';
-import { EventsController } from './events';
 import { FormulaService } from './formula';
 import { HealthController } from './health';
 import { ModelsController } from './models';
 import { ProjectsController } from './projects';
-import { UploadsController } from './uploads';
+import { RecordsController } from './records';
 
 @Module({
   imports: [
@@ -33,8 +32,7 @@ import { UploadsController } from './uploads';
     HealthController,
     ProjectsController,
     ModelsController,
-    EventsController,
-    UploadsController,
+    RecordsController,
     DashboardController,
     ExtraCreditsController,
   ],

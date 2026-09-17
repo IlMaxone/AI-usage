@@ -1,6 +1,6 @@
 export interface User { id: string; email: string; displayName: string }
 export interface AuthResponse { accessToken: string; expiresIn: string; user: User }
-export interface Project { id: string; name: string; color: string; eventCount?: number; usedPctSum?: number }
+export interface Project { id: string; name: string; color: string; recordCount?: number; usedPctSum?: number }
 export interface Pricing {
   currency: 'USD' | 'EUR'; inputPerMillion: number; cachedInputPerMillion: number; outputPerMillion: number;
   creditsPerMillionInput?: number; creditsPerMillionCachedInput?: number; creditsPerMillionOutput?: number;
@@ -12,17 +12,33 @@ export interface AiModel {
   id: string; provider: string; name: string; reasoning: string; isDefault: boolean; version: number;
   pricing: Pricing; rules: Rule[]; latestCalibration: Calibration | null;
 }
-export interface UsageResult { status: 'PAIRED' | 'END_ONLY' | 'WAITING_FOR_END' | 'WINDOW_MISMATCH' | 'NO_USAGE'; usedPct: number | null }
-export interface UsageEvent {
-  id: string; projectId: string; modelId: string; title: string; startsAt: string; endsAt: string | null;
-  notes: string | null; startUploadId: string | null; endUploadId: string | null; usage: UsageResult;
+export interface UsageResult { status: 'MEASURED' | 'SEGMENT_MEASURED' | 'WAITING_FOR_OCR' | 'WINDOW_MISMATCH'; usedPct: number | null }
+export interface UsageSnapshot {
+  fiveHourRemainingPct: number; fiveHourUsedPct: number; fiveHourResetsAt: string;
+  weeklyRemainingPct: number; weeklyUsedPct: number; weeklyResetsOn: string;
 }
 export interface Upload {
-  id: string; projectId: string; eventId: string | null; role: 'SINGLE' | 'START' | 'END'; originalName: string;
-  status: 'UPLOADED' | 'PROCESSING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED'; reviewReason: string | null; createdAt: string;
+  id: string; recordId: string; role: 'SINGLE' | 'START' | 'END'; originalName: string;
+  status: 'DRAFT' | 'UPLOADED' | 'PROCESSING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
+  reviewReason: string | null; createdAt: string;
+}
+export interface Reading {
+  upload: Upload | null; rawSnapshot: UsageSnapshot | null; correction: (UsageSnapshot & { reason: string; createdAt: string }) | null;
+  effectiveSnapshot: UsageSnapshot | null;
+}
+export interface UsageRecord {
+  id: string; projectId: string; modelId: string; mode: 'CONSTANT' | 'SEGMENT';
+  status: 'DRAFT' | 'VALIDATING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
+  note: string | null; createdAt: string; project: Project | null; model: AiModel | null;
+  single: Reading | null; start: Reading | null; end: Reading | null; usage: UsageResult;
+}
+export interface DashboardRecord {
+  id: string; mode: 'CONSTANT' | 'SEGMENT'; status: UsageRecord['status']; createdAt: string;
+  project: Project | null; model: Pick<AiModel, 'id'|'name'|'provider'|'reasoning'> | null;
+  usage: UsageResult; calculated: { value: number; unit: string; ruleName: string } | null;
 }
 export interface Dashboard {
-  metrics: { events: number; measuredEvents: number; pairedEvents: number; usedPctSum: number; extraCreditsSpent: number; extraPaidEur: number };
+  metrics: { records: number; measuredRecords: number; segments: number; usedPctSum: number; extraCreditsSpent: number; extraPaidEur: number };
   projects: Project[];
-  recentEvents: Array<{ id: string; title: string; startsAt: string; project: Project | null; model: Pick<AiModel, 'id'|'name'|'provider'|'reasoning'> | null; usage: UsageResult; calculated: { value: number; unit: string; ruleName: string } | null }>;
+  recentRecords: DashboardRecord[];
 }

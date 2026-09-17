@@ -102,8 +102,28 @@ export class UsageEventEntity {
   @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true }) deletedAt!: Date | null;
 }
 
+export type UsageRecordMode = 'CONSTANT' | 'SEGMENT';
+export type UsageRecordStatus = 'DRAFT' | 'VALIDATING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
+
+@Entity('usage_records')
+export class UsageRecordEntity {
+  @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
+  @Column({ name: 'project_id', type: 'uuid' }) projectId!: string;
+  @Column({ name: 'model_id', type: 'uuid' }) modelId!: string;
+  @Column({ type: 'varchar', length: 12 }) mode!: UsageRecordMode;
+  @Column({ type: 'varchar', length: 20, default: 'DRAFT' }) status!: UsageRecordStatus;
+  @Column({ name: 'single_upload_id', type: 'uuid', nullable: true }) singleUploadId!: string | null;
+  @Column({ name: 'start_upload_id', type: 'uuid', nullable: true }) startUploadId!: string | null;
+  @Column({ name: 'end_upload_id', type: 'uuid', nullable: true }) endUploadId!: string | null;
+  @Column({ type: 'text', nullable: true }) note!: string | null;
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' }) updatedAt!: Date;
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true }) deletedAt!: Date | null;
+}
+
 export type UploadRole = 'SINGLE' | 'START' | 'END';
-export type UploadStatus = 'UPLOADED' | 'PROCESSING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
+export type UploadStatus = 'DRAFT' | 'UPLOADED' | 'PROCESSING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
 
 @Entity('uploads')
 @Index(['ownerId', 'sha256'], { unique: true, where: 'sha256 IS NOT NULL' })
@@ -112,6 +132,7 @@ export class UploadEntity {
   @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
   @Column({ name: 'project_id', type: 'uuid' }) projectId!: string;
   @Column({ name: 'event_id', type: 'uuid', nullable: true }) eventId!: string | null;
+  @Column({ name: 'record_id', type: 'uuid', nullable: true }) recordId!: string | null;
   @Column({ type: 'varchar', length: 10 }) role!: UploadRole;
   @Column({ name: 'original_name', type: 'varchar', length: 255 }) originalName!: string;
   @Column({ name: 'storage_key', type: 'varchar', length: 255, unique: true }) storageKey!: string;
@@ -137,6 +158,22 @@ export class UsageSnapshotEntity {
   @Column({ name: 'weekly_resets_on', type: 'date' }) weeklyResetsOn!: string;
   @Column({ name: 'ocr_confidence', type: 'decimal', precision: 5, scale: 2 }) ocrConfidence!: number;
   @Column({ type: 'jsonb' }) validation!: Record<string, unknown>;
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
+}
+
+@Entity('usage_corrections')
+export class UsageCorrectionEntity {
+  @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
+  @Column({ name: 'record_id', type: 'uuid' }) recordId!: string;
+  @Column({ name: 'upload_id', type: 'uuid' }) uploadId!: string;
+  @Column({ name: 'five_hour_remaining_pct', type: 'decimal', precision: 5, scale: 2 }) fiveHourRemainingPct!: number;
+  @Column({ name: 'five_hour_used_pct', type: 'decimal', precision: 5, scale: 2 }) fiveHourUsedPct!: number;
+  @Column({ name: 'five_hour_resets_at', type: 'timestamptz' }) fiveHourResetsAt!: Date;
+  @Column({ name: 'weekly_remaining_pct', type: 'decimal', precision: 5, scale: 2 }) weeklyRemainingPct!: number;
+  @Column({ name: 'weekly_used_pct', type: 'decimal', precision: 5, scale: 2 }) weeklyUsedPct!: number;
+  @Column({ name: 'weekly_resets_on', type: 'date' }) weeklyResetsOn!: string;
+  @Column({ type: 'varchar', length: 500 }) reason!: string;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
 }
 
@@ -185,8 +222,10 @@ export const ENTITIES = [
   AiModelEntity,
   CalculationRuleEntity,
   UsageEventEntity,
+  UsageRecordEntity,
   UploadEntity,
   UsageSnapshotEntity,
+  UsageCorrectionEntity,
   ExtraCreditPurchaseEntity,
   BillingCalibrationEntity,
   AuditEventEntity,

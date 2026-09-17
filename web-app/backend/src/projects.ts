@@ -4,7 +4,7 @@ import { IsHexColor, IsOptional, IsString, Length } from 'class-validator';
 import { Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuthUser, CurrentUser } from './common';
-import { ProjectEntity, UsageEventEntity } from './entities';
+import { ProjectEntity } from './entities';
 
 class ProjectDto {
   @IsString() @Length(1, 100) name!: string;
@@ -20,7 +20,6 @@ class UpdateProjectDto {
 export class ProjectsController {
   constructor(
     @InjectRepository(ProjectEntity) private readonly projects: Repository<ProjectEntity>,
-    @InjectRepository(UsageEventEntity) private readonly events: Repository<UsageEventEntity>,
     private readonly audit: AuditService,
   ) {}
 
@@ -56,9 +55,6 @@ export class ProjectsController {
   @Delete(':id')
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     await this.owned(id, user.id);
-    if (await this.events.exist({ where: { ownerId: user.id, projectId: id } })) {
-      throw new ConflictException('Il progetto contiene eventi: elimina prima gli eventi attivi');
-    }
     await this.projects.softDelete({ id, ownerId: user.id });
     await this.audit.record(user.id, 'PROJECT_DELETED', 'project', id);
     return { deleted: true };

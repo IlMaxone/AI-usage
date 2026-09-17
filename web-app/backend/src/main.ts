@@ -17,7 +17,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   const config = new DocumentBuilder()
     .setTitle('AI Usage Web API')
-    .setDescription('API privata per rilevazioni OCR, eventi, progetti, modelli e formule.')
+    .setDescription('API privata per rilevazioni OCR, progetti, modelli e formule.')
     .setVersion('1.0')
     .addBearerAuth()
     .build();
