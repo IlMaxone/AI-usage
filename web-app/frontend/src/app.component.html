@@ -1,0 +1,190 @@
+@if (!auth.user()) {
+  <main class="auth-shell">
+    <section class="auth-story">
+      <div class="brand"><span class="brand-mark">A/</span><span>AI Usage</span></div>
+      <div class="story-copy">
+        <p class="eyebrow">PROJECT LEDGER · PRIVATE BY DESIGN</p>
+        <h1>Misura il lavoro.<br><em>Non le supposizioni.</em></h1>
+        <p class="lead">Attribuisci ogni finestra di utilizzo al progetto giusto, con screenshot verificati e calcoli trasparenti.</p>
+      </div>
+      <div class="privacy-note"><span class="pulse"></span> OCR locale · testo completo mai archiviato</div>
+    </section>
+    <section class="auth-panel">
+      <form class="auth-card" [formGroup]="authForm" (ngSubmit)="submitAuth()">
+        <div>
+          <p class="eyebrow">{{ registerMode() ? 'NUOVO SPAZIO' : 'BENTORNATO' }}</p>
+          <h2>{{ registerMode() ? 'Crea il tuo registro' : 'Accedi al registro' }}</h2>
+          <p class="muted">I dati di ogni account restano separati.</p>
+        </div>
+        @if (registerMode()) {
+          <label>Nome visualizzato<input formControlName="displayName" autocomplete="name" placeholder="Mario Rossi"></label>
+        }
+        <label>Email<input formControlName="email" type="email" autocomplete="email" placeholder="nome@azienda.it"></label>
+        <label>Password<input formControlName="password" type="password" [autocomplete]="registerMode() ? 'new-password' : 'current-password'" placeholder="Almeno 12 caratteri"></label>
+        @if (error()) { <p class="alert error">{{ error() }}</p> }
+        <button class="primary full" type="submit" [disabled]="loading() || authForm.invalid">{{ loading() ? 'Attendi…' : (registerMode() ? 'Crea account' : 'Entra') }}</button>
+        <button class="text-button" type="button" (click)="registerMode.set(!registerMode())">
+          {{ registerMode() ? 'Hai già un account? Accedi' : 'Prima volta? Crea un account' }}
+        </button>
+      </form>
+    </section>
+  </main>
+} @else {
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">A/</span><span>AI Usage</span></div>
+      <nav aria-label="Navigazione principale">
+        <button [class.active]="tab() === 'overview'" (click)="setTab('overview')"><span>⌁</span> Panoramica</button>
+        <button [class.active]="tab() === 'events'" (click)="setTab('events')"><span>◫</span> Eventi</button>
+        <button [class.active]="tab() === 'upload'" (click)="setTab('upload')"><span>↥</span> Screenshot @if (activeUploads()) { <b>{{ activeUploads() }}</b> }</button>
+        <button [class.active]="tab() === 'models'" (click)="setTab('models')"><span>⌘</span> Modelli e calcoli</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="avatar">{{ auth.user()!.displayName.slice(0, 1).toUpperCase() }}</div>
+        <div><strong>{{ auth.user()!.displayName }}</strong><small>{{ auth.user()!.email }}</small></div>
+        <button class="logout" title="Esci" (click)="logout()">↗</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div><p class="eyebrow">USAGE ANALYTICS</p><h1>{{ tab() === 'overview' ? 'Panoramica' : tab() === 'events' ? 'Eventi di lavoro' : tab() === 'upload' ? 'Rilevazioni' : 'Modelli e calcoli' }}</h1></div>
+        <button class="secondary" (click)="refresh()" [disabled]="loading()">{{ loading() ? 'Aggiorno…' : 'Aggiorna dati' }}</button>
+      </header>
+
+      @if (message()) { <p class="alert success">{{ message() }}</p> }
+      @if (error()) { <p class="alert error">{{ error() }}</p> }
+
+      @if (tab() === 'overview') {
+        @if (dashboard(); as data) {
+          <section class="metrics">
+            <article class="metric hero-metric"><span>Utilizzo attribuito</span><strong>{{ data.metrics.usedPctSum | number:'1.0-2' }}<small>%</small></strong><p>Somma dei delta e degli snapshot finali</p></article>
+            <article class="metric"><span>Eventi misurati</span><strong>{{ data.metrics.measuredEvents }}<small>/{{ data.metrics.events }}</small></strong><p>{{ data.metrics.pairedEvents }} con inizio + fine</p></article>
+            <article class="metric"><span>Crediti extra spesi</span><strong>{{ data.metrics.extraCreditsSpent | number }}</strong><p>€ {{ data.metrics.extraPaidEur | number:'1.2-2' }} dichiarati</p></article>
+          </section>
+
+          <section class="split-grid">
+            <article class="panel span-two">
+              <div class="panel-head"><div><p class="eyebrow">ULTIME ATTIVITÀ</p><h2>Registro eventi</h2></div><button class="text-button" (click)="setTab('events')">Gestisci →</button></div>
+              <div class="table-wrap"><table><thead><tr><th>Evento</th><th>Progetto</th><th>Modello</th><th>Attribuzione</th><th>Calcolo</th></tr></thead><tbody>
+                @for (item of data.recentEvents; track item.id) {
+                  <tr><td><strong>{{ item.title }}</strong><small>{{ item.startsAt | date:'dd MMM, HH:mm' }}</small></td><td><span class="project-dot" [style.background]="item.project?.color"></span>{{ item.project?.name || '—' }}</td><td>{{ item.model?.name || '—' }}<small>{{ item.model?.reasoning }}</small></td><td><span class="status" [class.warn]="item.usage.usedPct === null">{{ statusLabel(item.usage.status) }}</span><strong class="usage">{{ item.usage.usedPct === null ? '—' : (item.usage.usedPct | number:'1.0-2') + '%' }}</strong></td><td>{{ item.calculated ? ((item.calculated.value | number:'1.0-2') + ' ' + item.calculated.unit) : '—' }}</td></tr>
+                } @empty { <tr><td colspan="5" class="empty">Nessun evento. Inizia creando un progetto e il primo evento.</td></tr> }
+              </tbody></table></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head"><div><p class="eyebrow">PROGETTI</p><h2>Distribuzione</h2></div></div>
+              <div class="project-list">
+                @for (project of data.projects; track project.id) {
+                  <div class="project-row"><span class="project-icon" [style.background]="project.color">{{ project.name.slice(0, 1).toUpperCase() }}</span><div><strong>{{ project.name }}</strong><small>{{ project.eventCount }} eventi</small></div><b>{{ project.usedPctSum | number:'1.0-1' }}%</b></div>
+                }
+              </div>
+              <form class="inline-form" [formGroup]="projectForm" (ngSubmit)="createProject()">
+                <input formControlName="color" type="color" aria-label="Colore progetto"><input formControlName="name" placeholder="Nuovo progetto"><button type="submit" class="square" [disabled]="projectForm.invalid">+</button>
+              </form>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head"><div><p class="eyebrow">APPEND-ONLY</p><h2>Crediti extra</h2></div></div>
+              <p class="muted">Ogni acquisto è considerato interamente speso, con residuo assunto pari a zero.</p>
+              <form class="compact-form" [formGroup]="creditsForm" (ngSubmit)="addCredits()">
+                <label>Crediti<input type="number" formControlName="credits" min="1"></label>
+                <label>Pagato EUR<input type="number" formControlName="paidEur" min="0.01" step="0.01"></label>
+                <label>Data<input type="datetime-local" formControlName="purchasedAt"></label>
+                <button class="secondary" type="submit" [disabled]="creditsForm.invalid">Registra acquisto</button>
+              </form>
+            </article>
+          </section>
+        }
+      }
+
+      @if (tab() === 'events') {
+        <section class="content-grid">
+          <article class="panel form-panel">
+            <p class="eyebrow">NUOVO EVENTO</p><h2>Attribuisci il lavoro</h2><p class="muted">Gli screenshot di inizio e fine sono facoltativi. Se li usi entrambi, il sistema considera solo il delta nella stessa finestra 5h.</p>
+            <form class="stack-form" [formGroup]="eventForm" (ngSubmit)="createEvent()">
+              <label>Titolo<input formControlName="title" placeholder="Implementazione checkout"></label>
+              <div class="field-row"><label>Progetto<select formControlName="projectId">@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label><label>Modello<select formControlName="modelId">@for (model of models(); track model.id) { <option [value]="model.id">{{ model.name }} · {{ model.reasoning }}</option> }</select></label></div>
+              <div class="field-row"><label>Inizio<input type="datetime-local" formControlName="startsAt"></label><label>Fine (facoltativa)<input type="datetime-local" formControlName="endsAt"></label></div>
+              <label>Note<textarea formControlName="notes" rows="3" placeholder="Contesto sintetico, senza dati personali"></textarea></label>
+              <button class="primary" type="submit" [disabled]="eventForm.invalid">Aggiungi evento</button>
+            </form>
+          </article>
+          <article class="panel event-list-panel">
+            <div class="panel-head"><div><p class="eyebrow">STORICO</p><h2>{{ events().length }} eventi</h2></div></div>
+            <div class="event-cards">
+              @for (event of events(); track event.id) {
+                <article class="event-card"><div><span class="status" [class.warn]="event.usage.usedPct === null">{{ statusLabel(event.usage.status) }}</span><h3>{{ event.title }}</h3><p>{{ event.startsAt | date:'dd MMM yyyy, HH:mm' }} @if (event.endsAt) { — {{ event.endsAt | date:'HH:mm' }} }</p></div><div class="event-result"><strong>{{ event.usage.usedPct === null ? '—' : (event.usage.usedPct | number:'1.0-2') + '%' }}</strong><button class="danger-link" (click)="deleteEvent(event.id)">Elimina</button></div></article>
+              } @empty { <div class="empty">Il registro eventi è vuoto.</div> }
+            </div>
+          </article>
+        </section>
+      }
+
+      @if (tab() === 'upload') {
+        <section class="content-grid">
+          <article class="panel form-panel">
+            <p class="eyebrow">NUOVA RILEVAZIONE</p><h2>Carica uno screenshot</h2><p class="muted">PNG, JPEG o WebP fino a 10 MB. Servono due letture OCR concordanti prima della validazione.</p>
+            <form class="stack-form" [formGroup]="uploadForm" (ngSubmit)="upload()">
+              <label>Progetto<select formControlName="projectId">@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
+              <label>Tipo rilevazione<select formControlName="role"><option value="SINGLE">Singola / flusso storico</option><option value="START">Usage di inizio</option><option value="END">Usage di fine</option></select></label>
+              <label>Evento @if (uploadForm.controls.role.value !== 'SINGLE') { <span class="required">richiesto</span> }<select formControlName="eventId"><option value="">Nessun evento</option>@for (event of events(); track event.id) { <option [value]="event.id">{{ event.title }}</option> }</select></label>
+              <label class="dropzone"><input type="file" accept="image/png,image/jpeg,image/webp" (change)="chooseFile($event)"><span>↥</span><strong>Scegli lo screenshot</strong><small>Il testo OCR completo non verrà salvato</small></label>
+              <button class="primary" type="submit" [disabled]="loading()">Carica e valida</button>
+            </form>
+          </article>
+          <article class="panel event-list-panel">
+            <div class="panel-head"><div><p class="eyebrow">CODA OCR</p><h2>Ultimi upload</h2></div><span class="status">{{ activeUploads() }} attivi</span></div>
+            <div class="event-cards">
+              @for (upload of uploads(); track upload.id) {
+                <article class="event-card"><div><span class="status" [class.warn]="upload.status === 'MANUAL_REVIEW' || upload.status === 'FAILED'">{{ uploadStatus(upload.status) }}</span><h3>{{ upload.originalName }}</h3><p>{{ upload.role }} · {{ upload.createdAt | date:'dd MMM, HH:mm' }}</p>@if (upload.reviewReason) { <small class="review">{{ upload.reviewReason }}</small> }</div></article>
+              } @empty { <div class="empty">Nessuna immagine caricata.</div> }
+            </div>
+          </article>
+        </section>
+      }
+
+      @if (tab() === 'models') {
+        <section class="model-grid">
+          <article class="panel form-panel">
+            <p class="eyebrow">CATALOGO</p><h2>Nuovo modello</h2><p class="muted">OpenAI o qualunque altro provider. I prezzi sono per milione di token.</p>
+            <form class="stack-form" [formGroup]="modelForm" (ngSubmit)="createModel()">
+              <div class="field-row"><label>Provider<input formControlName="provider"></label><label>Nome<input formControlName="name" placeholder="Claude, Gemini, modello locale…"></label></div>
+              <div class="field-row"><label>Reasoning / variante<input formControlName="reasoning"></label><label>Valuta<select formControlName="currency"><option>USD</option><option>EUR</option></select></label></div>
+              <div class="field-row three"><label>Input<input type="number" formControlName="input" min="0" step="0.0001"></label><label>Cache<input type="number" formControlName="cached" min="0" step="0.0001"></label><label>Output<input type="number" formControlName="output" min="0" step="0.0001"></label></div>
+              <button class="primary" type="submit" [disabled]="modelForm.invalid">Salva modello</button>
+            </form>
+          </article>
+          <article class="panel form-panel">
+            <p class="eyebrow">MOTORE FORMULE</p><h2>Nuovo calcolo</h2><p class="muted">Componi un AST JSON sicuro. Variabili: <code>usedPct</code>, <code>fullWindowCredits</code>, <code>fullWindowEur</code>, prezzi input/cache/output.</p>
+            <form class="stack-form" [formGroup]="ruleForm" (ngSubmit)="createRule()">
+              <label>Modello<select formControlName="modelId">@for (model of models(); track model.id) { <option [value]="model.id">{{ model.name }} · {{ model.reasoning }}</option> }</select></label>
+              <div class="field-row"><label>Nome calcolo<input formControlName="name"></label><label>Unità output<input formControlName="outputUnit"></label></div>
+              <label>Formula<textarea class="code" formControlName="expression" rows="11" spellcheck="false"></textarea></label>
+              <button class="primary" type="submit" [disabled]="ruleForm.invalid">Aggiungi calcolo</button>
+            </form>
+          </article>
+          <article class="panel form-panel">
+            <p class="eyebrow">CALIBRAZIONE PRIMARIA · APPEND-ONLY</p><h2>Osservazione di fatturazione</h2><p class="muted">Inserisci solo dati osservati. Crediti e valore della finestra completa vengono derivati dal motore.</p>
+            <form class="stack-form" [formGroup]="calibrationForm" (ngSubmit)="addCalibration()">
+              <label>Modello<select formControlName="modelId">@for (model of models(); track model.id) { <option [value]="model.id">{{ model.name }} · {{ model.reasoning }}</option> }</select></label>
+              <div class="field-row"><label>Usage piano osservato %<input type="number" formControlName="observedUsagePct" min="0.01" max="100" step="0.01"></label><label>Durata osservata sec<input type="number" formControlName="observedDurationSeconds" min="1"></label></div>
+              <div class="field-row"><label>Fatturato stimato EUR<input type="number" formControlName="estimatedBilledEur" min="0.0001" step="0.0001"></label><label>Crediti nel pacchetto<input type="number" formControlName="creditPackCredits" min="1"></label></div>
+              <div class="field-row"><label>Prezzo pacchetto EUR<input type="number" formControlName="creditPackPaidEur" min="0.01" step="0.01"></label><label>Reasoning pilota<input formControlName="pilotReasoning"></label></div>
+              <div class="field-row"><label>Modalità pilota<input formControlName="pilotExecutionMode"></label><label>Durata pilota sec<input type="number" formControlName="pilotDurationSeconds" min="1"></label></div>
+              <label>Fatturato pilota EUR<input type="number" formControlName="pilotBilledEur" min="0.0001" step="0.0001"></label>
+              <label>Nota<textarea formControlName="note" rows="2"></textarea></label>
+              <button class="primary" type="submit" [disabled]="calibrationForm.invalid">Registra osservazione</button>
+            </form>
+          </article>
+        </section>
+        <section class="model-list">
+          @for (model of models(); track model.id) {
+            <article class="model-card"><div class="model-logo">{{ model.provider.slice(0, 2).toUpperCase() }}</div><div class="model-main"><div><p class="eyebrow">{{ model.provider }} · V{{ model.version }}</p><h3>{{ model.name }}</h3><span class="status">{{ model.reasoning }}</span> @if (model.isDefault) { <span class="status lime">Predefinito</span> }</div><div class="price-strip"><span>Input <strong>{{ model.pricing.inputPerMillion | number:'1.2-4' }}</strong></span><span>Cache <strong>{{ model.pricing.cachedInputPerMillion | number:'1.2-4' }}</strong></span><span>Output <strong>{{ model.pricing.outputPerMillion | number:'1.2-4' }}</strong></span><span>Valuta <strong>{{ model.pricing.currency }}</strong></span></div><div class="rules">@for (rule of model.rules; track rule.id) { <span>ƒ {{ rule.name }} → {{ rule.outputUnit }}</span> } @empty { <span class="muted">Nessun calcolo collegato</span> } @if (model.latestCalibration) { <span>Calibrato: {{ model.latestCalibration.derived.fullWindowCredits | number:'1.0-2' }} crediti/finestra</span> } @else { <span class="muted">Calibrazione non disponibile</span> }</div></div></article>
+          }
+        </section>
+      }
+    </main>
+  </div>
+}

@@ -273,3 +273,15 @@ Il repository contiene il motore OCR locale, la separazione per progetto, la
 raccolta delle fonti con timestamp e hash, i report Markdown e CSV e la dashboard
 HTML statica. L'analisi resta volutamente manuale: non sono presenti scheduler,
 server locali o processi automatici in background.
+
+## Applicazione web separata
+
+La cartella [`web-app/`](web-app/) contiene un'applicazione separata e
+dockerizzata con Angular, NestJS, worker OCR locale e PostgreSQL. Non sostituisce
+il processo locale descritto sopra e non modifica i registri JSONL o le
+dashboard statiche esistenti.
+
+L'applicazione aggiunge autenticazione JWT, progetti per utente, upload dal
+browser, eventi con snapshot opzionali di inizio/fine, modelli configurabili e
+formule versionate. Le istruzioni di avvio e il modello dati sono documentati
+nel README dedicato.
