@@ -284,6 +284,7 @@ dashboard statiche esistenti.
 L'applicazione aggiunge autenticazione JWT, progetti per utente, upload dal
 browser e rilevazioni con uno screenshot o con coppia inizio/fine. I profili
 economici dei modelli sono separati dall'OCR e possono essere applicati a
-posteriori allo stesso storico per confrontare costo proporzionale della
-finestra 5h e costo al minuto equivalente. Le istruzioni di avvio e il modello
-dati sono documentati nel README dedicato.
+posteriori allo stesso storico. Il consumo massimo della finestra 5h e il costo
+al minuto determinano il minutaggio disponibile, il costo attribuito e i
+relativi limiti. Le istruzioni di avvio e il modello dati sono documentati nel
+README dedicato.

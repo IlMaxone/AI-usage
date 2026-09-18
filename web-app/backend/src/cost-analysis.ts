@@ -13,23 +13,42 @@ import {
 } from './entities';
 import { computeRecordUsage, SnapshotInput } from './records';
 
-const WINDOW_MINUTES = 5 * 60;
+const WINDOW_ALIGNMENT_TOLERANCE_MS = 60 * 60_000;
 
 export function calculateModelCost(usedPct: number, pricing: ModelPricing) {
-  const equivalentUsageMinutes = (usedPct / 100) * WINDOW_MINUTES;
-  const windowBasedCost = (usedPct / 100) * Number(pricing.fiveHourWindowCost);
-  const minuteBasedCost = equivalentUsageMinutes * Number(pricing.costPerMinute);
+  const attributedUsedPct = Math.min(100, Math.max(0, Number(usedPct)));
+  const maximumWindowCost = Math.max(0, Number(pricing.fiveHourWindowCost));
+  const costPerMinute = Math.max(0, Number(pricing.costPerMinute));
+  const estimatedCost = (attributedUsedPct / 100) * maximumWindowCost;
+  const maximumUsageMinutes = costPerMinute > 0 ? maximumWindowCost / costPerMinute : null;
+  const estimatedUsageMinutes = costPerMinute > 0 ? estimatedCost / costPerMinute : null;
   return {
-    equivalentUsageMinutes: round(equivalentUsageMinutes, 2),
-    windowBasedCost: round(windowBasedCost, 14),
-    minuteBasedCost: round(minuteBasedCost, 14),
-    difference: round(minuteBasedCost - windowBasedCost, 14),
+    attributedUsedPct: round(attributedUsedPct, 4),
+    maximumWindowCost: round(maximumWindowCost, 14),
+    maximumUsageMinutes: maximumUsageMinutes === null ? null : round(maximumUsageMinutes, 8),
+    estimatedCost: round(Math.min(estimatedCost, maximumWindowCost), 14),
+    estimatedUsageMinutes: estimatedUsageMinutes === null
+      ? null
+      : round(Math.min(estimatedUsageMinutes, maximumUsageMinutes!), 8),
+    remainingWindowCost: round(Math.max(0, maximumWindowCost - estimatedCost), 14),
   };
 }
 
 function round(value: number, digits: number) {
   const factor = 10 ** digits;
   return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
+export function allocateWindowUsage(values: number[]) {
+  const normalized = values.map((value) => Math.max(0, Number(value)));
+  const rawUsedPct = normalized.reduce((sum, value) => sum + value, 0);
+  const allocationScale = rawUsedPct > 100 ? 100 / rawUsedPct : 1;
+  return {
+    rawUsedPct: round(rawUsedPct, 4),
+    attributedUsedPct: round(Math.min(100, rawUsedPct), 4),
+    cappedByWindow: allocationScale < 1,
+    allocations: normalized.map((value) => round(value * allocationScale, 8)),
+  };
 }
 
 @Controller('cost-analysis')
@@ -84,12 +103,15 @@ export class CostAnalysisController {
       ? captureByUpload.get(uploadId)?.capturedAt ?? snapshotByUpload.get(uploadId)?.capturedAt ?? null
       : null;
 
-    const items = records.flatMap((record) => {
+    const baseItems = records.flatMap((record) => {
+      const single = effective(record.singleUploadId);
+      const start = effective(record.startUploadId);
+      const end = effective(record.endUploadId);
       const usage = computeRecordUsage(
         record.mode,
-        effective(record.singleUploadId),
-        effective(record.startUploadId),
-        effective(record.endUploadId),
+        single,
+        start,
+        end,
       );
       if (usage.usedPct === null) return [];
       const startAt = capturedAt(record.startUploadId);
@@ -103,17 +125,47 @@ export class CostAnalysisController {
         mode: record.mode,
         capturedAt: endAt ?? record.createdAt,
         usedPct: usage.usedPct,
+        fiveHourResetsAt: record.mode === 'SEGMENT'
+          ? end?.fiveHourResetsAt ?? null
+          : single?.fiveHourResetsAt ?? null,
         elapsedMinutes,
-        ...calculateModelCost(usage.usedPct, model.pricing),
       }];
     });
 
-    const totals = items.reduce((result, item) => ({
-      usedPct: result.usedPct + item.usedPct,
-      equivalentUsageMinutes: result.equivalentUsageMinutes + item.equivalentUsageMinutes,
-      windowBasedCost: result.windowBasedCost + item.windowBasedCost,
-      minuteBasedCost: result.minuteBasedCost + item.minuteBasedCost,
-    }), { usedPct: 0, equivalentUsageMinutes: 0, windowBasedCost: 0, minuteBasedCost: 0 });
+    const groupedWindows: Array<{ anchor: number | null; resetAt: Date | string | null; records: typeof baseItems }> = [];
+    for (const item of baseItems) {
+      const resetTime = item.fiveHourResetsAt ? new Date(item.fiveHourResetsAt).getTime() : null;
+      const group = resetTime === null
+        ? undefined
+        : groupedWindows.find((candidate) => candidate.anchor !== null
+          && Math.abs(candidate.anchor - resetTime) <= WINDOW_ALIGNMENT_TOLERANCE_MS);
+      if (group) group.records.push(item);
+      else groupedWindows.push({ anchor: resetTime, resetAt: item.fiveHourResetsAt, records: [item] });
+    }
+
+    const costsByRecord = new Map<string, ReturnType<typeof calculateModelCost> & { cappedByWindow: boolean }>();
+    const windows = groupedWindows.map((group) => {
+      const allocation = allocateWindowUsage(group.records.map((item) => item.usedPct));
+      for (const [index, item] of group.records.entries()) {
+        costsByRecord.set(item.recordId, {
+          ...calculateModelCost(allocation.allocations[index]!, model.pricing),
+          cappedByWindow: allocation.cappedByWindow,
+        });
+      }
+      return {
+        resetsAt: group.resetAt,
+        records: group.records.length,
+        rawUsedPct: allocation.rawUsedPct,
+        cappedByWindow: allocation.cappedByWindow,
+        ...calculateModelCost(allocation.attributedUsedPct, model.pricing),
+      };
+    });
+
+    const items = baseItems.map((item) => ({ ...item, ...costsByRecord.get(item.recordId)! }));
+    const totalEstimatedMinutes = windows.every((window) => window.estimatedUsageMinutes !== null)
+      ? windows.reduce((sum, window) => sum + (window.estimatedUsageMinutes ?? 0), 0)
+      : null;
+    const fullWindow = calculateModelCost(100, model.pricing);
 
     return {
       model: {
@@ -125,13 +177,16 @@ export class CostAnalysisController {
       },
       summary: {
         records: items.length,
-        usedPct: round(totals.usedPct, 2),
-        equivalentUsageMinutes: round(totals.equivalentUsageMinutes, 2),
-        windowBasedCost: round(totals.windowBasedCost, 14),
-        minuteBasedCost: round(totals.minuteBasedCost, 14),
-        difference: round(totals.minuteBasedCost - totals.windowBasedCost, 14),
+        windows: windows.length,
+        cappedWindows: windows.filter((window) => window.cappedByWindow).length,
+        attributedUsedPct: round(windows.reduce((sum, window) => sum + window.attributedUsedPct, 0), 4),
+        estimatedCost: round(windows.reduce((sum, window) => sum + window.estimatedCost, 0), 14),
+        estimatedUsageMinutes: totalEstimatedMinutes === null ? null : round(totalEstimatedMinutes, 8),
+        maximumWindowCost: fullWindow.maximumWindowCost,
+        maximumUsageMinutesPerWindow: fullWindow.maximumUsageMinutes,
       },
       items,
+      windows,
     };
   }
 }

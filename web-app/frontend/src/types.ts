@@ -41,13 +41,24 @@ export interface DashboardRecord {
 }
 export interface CostAnalysisItem {
   recordId: string; project: Project | null; mode: 'CONSTANT' | 'SEGMENT'; capturedAt: string;
-  usedPct: number; elapsedMinutes: number | null; equivalentUsageMinutes: number;
-  windowBasedCost: number; minuteBasedCost: number; difference: number;
+  fiveHourResetsAt: string | null; usedPct: number; attributedUsedPct: number; elapsedMinutes: number | null;
+  maximumWindowCost: number; maximumUsageMinutes: number | null; estimatedCost: number;
+  estimatedUsageMinutes: number | null; remainingWindowCost: number; cappedByWindow: boolean;
+}
+export interface CostAnalysisWindow {
+  resetsAt: string | null; records: number; rawUsedPct: number; attributedUsedPct: number; cappedByWindow: boolean;
+  maximumWindowCost: number; maximumUsageMinutes: number | null; estimatedCost: number;
+  estimatedUsageMinutes: number | null; remainingWindowCost: number;
 }
 export interface CostAnalysis {
   model: Pick<AiModel, 'id' | 'provider' | 'name' | 'reasoning' | 'pricing'>;
-  summary: Omit<CostAnalysisItem, 'recordId' | 'project' | 'mode' | 'capturedAt' | 'elapsedMinutes'> & { records: number };
+  summary: {
+    records: number; windows: number; cappedWindows: number; attributedUsedPct: number;
+    estimatedCost: number; estimatedUsageMinutes: number | null;
+    maximumWindowCost: number; maximumUsageMinutesPerWindow: number | null;
+  };
   items: CostAnalysisItem[];
+  windows: CostAnalysisWindow[];
 }
 export interface GalleryUpload {
   id: string; recordId: string | null; role: 'SINGLE' | 'START' | 'END'; originalName: string;

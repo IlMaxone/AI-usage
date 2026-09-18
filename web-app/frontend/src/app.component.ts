@@ -255,6 +255,13 @@ export class AppComponent implements OnDestroy {
       error: (error) => this.fail(error),
     });
   }
+  draftMaximumMinutes() {
+    const maximumWindowCost = this.parseLocalizedDecimal(this.modelForm.controls.fiveHourWindowCost.value);
+    const costPerMinute = this.parseLocalizedDecimal(this.modelForm.controls.costPerMinute.value);
+    return Number.isFinite(maximumWindowCost) && Number.isFinite(costPerMinute) && costPerMinute > 0
+      ? maximumWindowCost / costPerMinute
+      : null;
+  }
   editModel(model: AiModel) {
     this.editingModelId.set(model.id);
     this.modelForm.setValue({

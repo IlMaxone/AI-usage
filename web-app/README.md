@@ -106,7 +106,7 @@ pagina **Modelli e conti** si censisce per ogni scenario:
 
 - provider, nome e livello di reasoning;
 - valuta (`EUR` o `USD`);
-- costo dichiarato dell'intera finestra di 5 ore;
+- consumo economico massimo consentito nell'intera finestra di 5 ore;
 - costo dichiarato per minuto equivalente consumato.
 
 I due importi accettano sia la virgola sia il punto come separatore decimale,
@@ -114,11 +114,16 @@ anche con molte cifre (per esempio `0,1454545454545455`). L'app normalizza il
 valore prima di inviarlo all'API e conserva la precisione utile nei calcoli.
 
 Un modello selezionato viene applicato dinamicamente a tutte le rilevazioni OCR,
-oppure a un solo progetto, senza riscrivere lo storico. L'usage percentuale viene
-convertito in minuti equivalenti su 300 minuti. La UI presenta due stime
-alternative: costo proporzionale della finestra e costo per minuti equivalenti,
-oltre al loro scostamento. Le due stime non vengono sommate. Cambiando modello si
-ottiene immediatamente un nuovo scenario sugli stessi dati OCR.
+oppure a un solo progetto, senza riscrivere lo storico. Il minutaggio non viene
+più assunto pari a 300 minuti: il massimo disponibile è calcolato come
+`consumo massimo 5h / costo al minuto`. La percentuale OCR consuma la stessa
+quota del massimale economico e del minutaggio derivato.
+
+Le rilevazioni vengono raggruppate per reset 5h, mantenendo la tolleranza di
+un'ora. Se la somma grezza supera il 100%, l'attribuzione della finestra viene
+ridotta proporzionalmente: il costo non può superare il massimale configurato e
+i minuti non possono superare quelli acquistabili con quel massimale. Cambiando
+modello si ottiene immediatamente un nuovo scenario sugli stessi dati OCR.
 
 ## Verifiche locali
 
