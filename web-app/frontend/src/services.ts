@@ -37,8 +37,8 @@ export class ApiService {
   private readonly http = inject(HttpClient);
   dashboard() { return this.http.get<Dashboard>(`${API_URL}/dashboard`); }
   projects() { return this.http.get<Project[]>(`${API_URL}/projects`); }
-  createProject(payload: { name: string; color: string }) { return this.http.post<Project>(`${API_URL}/projects`, payload); }
-  updateProject(id: string, payload: { name: string; color: string }) { return this.http.patch<Project>(`${API_URL}/projects/${id}`, payload); }
+  createProject(payload: { name: string; color: string; modelId: string }) { return this.http.post<Project>(`${API_URL}/projects`, payload); }
+  updateProject(id: string, payload: { name: string; color: string; modelId: string }) { return this.http.patch<Project>(`${API_URL}/projects/${id}`, payload); }
   deleteProject(id: string) { return this.http.delete(`${API_URL}/projects/${id}`); }
   records() { return this.http.get<UsageRecord[]>(`${API_URL}/records`); }
   gallery(projectId: string) { return this.http.get<GalleryUpload[]>(`${API_URL}/records/uploads/gallery`, { params: { projectId } }); }

@@ -13,7 +13,12 @@ type SelectedFileBatch = { count: number; name: string; size: string };
 type AnalysisImageGroup = {
   key: string; recordId: string | null; mode: 'CONSTANT' | 'SEGMENT'; images: AnalysisImage[]; capturedAt: string | null;
 };
-type ProjectCostSummary = { project: Project; estimatedMinutes: number | null; estimatedCost: number };
+type ProjectCostSummary = {
+  project: Project;
+  model: CostAnalysis['model'] | null;
+  estimatedMinutes: number | null;
+  estimatedCost: number;
+};
 type UsageChartPoint = {
   id: string; x: number; fiveHourY: number; weeklyY: number; fiveHourUsedPct: number; weeklyUsedPct: number;
   shortLabel: string; fullLabel: string;
@@ -47,7 +52,7 @@ export class AppComponent implements OnDestroy {
   readonly models = signal<AiModel[]>([]);
   readonly costAnalysis = signal<CostAnalysis | null>(null);
   readonly costAnalysisLoading = signal(false);
-  readonly overviewCostAnalysis = signal<CostAnalysis | null>(null);
+  readonly overviewProjectAnalyses = signal<ReadonlyMap<string, CostAnalysis>>(new Map());
   readonly overviewCostLoading = signal(false);
   readonly costModelId = signal('');
   readonly costProjectId = signal('');
@@ -104,14 +109,16 @@ export class AppComponent implements OnDestroy {
     '#8C6956', '#B59672', '#6F7D73', '#A3B18A', '#E59866',
   ] as const;
   readonly projectCostSummaries = computed<ProjectCostSummary[]>(() => {
-    const analysis = this.overviewCostAnalysis();
+    const analyses = this.overviewProjectAnalyses();
     return this.projects().map((project) => {
+      const analysis = analyses.get(project.id);
       const items = analysis?.items.filter((item) => item.project?.id === project.id) ?? [];
       const estimatedMinutes = items.some((item) => item.estimatedUsageMinutes === null)
         ? null
         : items.reduce((total, item) => total + (item.estimatedUsageMinutes ?? 0), 0);
       return {
         project,
+        model: analysis?.model ?? null,
         estimatedMinutes,
         estimatedCost: items.reduce((total, item) => total + item.estimatedCost, 0),
       };
@@ -155,10 +162,12 @@ export class AppComponent implements OnDestroy {
   readonly projectForm = new FormGroup({
     name: new FormControl('', { nonNullable: true, validators: Validators.required }),
     color: new FormControl('#9BE15D', { nonNullable: true }),
+    modelId: new FormControl('', { nonNullable: true, validators: Validators.required }),
   });
   readonly editProjectForm = new FormGroup({
     name: new FormControl('', { nonNullable: true, validators: Validators.required }),
     color: new FormControl('#9BE15D', { nonNullable: true }),
+    modelId: new FormControl('', { nonNullable: true, validators: Validators.required }),
   });
   readonly recordForm = new FormGroup({
     projectId: new FormControl('', { nonNullable: true, validators: Validators.required }),
@@ -214,7 +223,8 @@ export class AppComponent implements OnDestroy {
   }
   logout() {
     this.releaseAnalysisImages(); this.auth.logout(); this.dashboard.set(null);
-    this.projects.set([]); this.records.set([]); this.models.set([]); this.costAnalysis.set(null); this.overviewCostAnalysis.set(null);
+    this.projects.set([]); this.records.set([]); this.models.set([]); this.costAnalysis.set(null);
+    this.overviewProjectAnalyses.set(new Map());
     this.recordsProjectId.set(''); this.analysisProjectId.set(''); this.selectedAnalysisRecordId.set(null);
   }
   refresh(preserveFeedback = false) {
@@ -233,11 +243,17 @@ export class AppComponent implements OnDestroy {
   createProject() {
     if (this.projectForm.invalid) return;
     this.api.createProject(this.projectForm.getRawValue()).subscribe({
-      next: () => { this.projectForm.reset({ name: '', color: '#9BE15D' }); this.succeed('Progetto creato.'); this.refresh(true); },
+      next: () => {
+        this.projectForm.reset({ name: '', color: '#9BE15D', modelId: this.defaultModelId() });
+        this.succeed('Progetto creato.'); this.refresh(true);
+      },
       error: (error) => this.fail(error),
     });
   }
-  editProject(project: Project) { this.editingProjectId.set(project.id); this.editProjectForm.setValue({ name: project.name, color: project.color }); }
+  editProject(project: Project) {
+    this.editingProjectId.set(project.id);
+    this.editProjectForm.setValue({ name: project.name, color: project.color, modelId: project.modelId || this.defaultModelId() });
+  }
   chooseProjectColor(color: string, editing = false) {
     (editing ? this.editProjectForm : this.projectForm).controls.color.setValue(color);
   }
@@ -405,11 +421,11 @@ export class AppComponent implements OnDestroy {
       error: (error) => this.fail(error),
     });
   }
-  draftMaximumMinutes() {
-    const maximumWindowCost = this.parseLocalizedDecimal(this.modelForm.controls.fiveHourWindowCost.value);
+  draftReferenceMinutes() {
+    const referenceWindowCost = this.parseLocalizedDecimal(this.modelForm.controls.fiveHourWindowCost.value);
     const costPerMinute = this.parseLocalizedDecimal(this.modelForm.controls.costPerMinute.value);
-    return Number.isFinite(maximumWindowCost) && Number.isFinite(costPerMinute) && costPerMinute > 0
-      ? maximumWindowCost / costPerMinute
+    return Number.isFinite(referenceWindowCost) && Number.isFinite(costPerMinute) && costPerMinute > 0
+      ? referenceWindowCost / costPerMinute
       : null;
   }
   editModel(model: AiModel) {
@@ -429,7 +445,7 @@ export class AppComponent implements OnDestroy {
     this.modelForm.reset({ provider: 'OpenAI', name: '', reasoning: 'high', currency: 'USD', fiveHourWindowCost: '0', costPerMinute: '0', isDefault: false });
   }
   selectCostModel(modelId: string) {
-    this.costModelId.set(modelId); this.loadCostAnalysis(); this.loadOverviewCostAnalysis(modelId);
+    this.costModelId.set(modelId); this.loadCostAnalysis();
   }
   selectCostProject(projectId: string) {
     this.costProjectId.set(projectId); this.loadCostAnalysis();
@@ -443,12 +459,25 @@ export class AppComponent implements OnDestroy {
       error: (error) => { this.costAnalysisLoading.set(false); this.fail(error); },
     });
   }
-  loadOverviewCostAnalysis(requestedModelId?: string) {
-    const modelId = requestedModelId || this.costModelId() || this.models().find((item) => item.isDefault)?.id || this.models()[0]?.id;
-    if (!modelId) { this.overviewCostAnalysis.set(null); return; }
+  loadOverviewCostAnalysis() {
+    const fallbackModelId = this.defaultModelId();
+    const requests = this.projects().flatMap((project) => {
+      const modelId = this.models().some((model) => model.id === project.modelId) ? project.modelId! : fallbackModelId;
+      return modelId
+        ? [this.api.costAnalysis(modelId, project.id).pipe(map((analysis) => [project.id, analysis] as const))]
+        : [];
+    });
+    if (!requests.length) {
+      this.overviewProjectAnalyses.set(new Map());
+      this.overviewCostLoading.set(false);
+      return;
+    }
     this.overviewCostLoading.set(true);
-    this.api.costAnalysis(modelId).subscribe({
-      next: (analysis) => { this.overviewCostAnalysis.set(analysis); this.overviewCostLoading.set(false); },
+    forkJoin(requests).subscribe({
+      next: (entries) => {
+        this.overviewProjectAnalyses.set(new Map(entries));
+        this.overviewCostLoading.set(false);
+      },
       error: (error) => { this.overviewCostLoading.set(false); this.fail(error); },
     });
   }
@@ -540,6 +569,16 @@ export class AppComponent implements OnDestroy {
     if (!models.some((model) => model.id === this.costModelId())) {
       this.costModelId.set(models.find((item) => item.isDefault)?.id || models[0]?.id || '');
     }
+    if (!models.some((model) => model.id === this.projectForm.controls.modelId.value)) {
+      this.projectForm.controls.modelId.setValue(this.defaultModelId(models));
+    }
+  }
+  modelLabel(modelId: string | null) {
+    const model = this.models().find((item) => item.id === modelId);
+    return model ? `${model.provider} · ${model.name} · ${model.reasoning}` : 'Modello predefinito';
+  }
+  private defaultModelId(models = this.models()) {
+    return models.find((item) => item.isDefault)?.id || models[0]?.id || '';
   }
   private parseLocalizedDecimal(value: string) {
     return Number(value.trim().replace(',', '.'));

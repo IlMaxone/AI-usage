@@ -7,6 +7,7 @@ import { CaptureTimeObservations1726500000002 } from './migrations/1726500000002
 import { DetachedModelCosting1726500000003 } from './migrations/1726500000003-detached-model-costing';
 import { WindowTolerance1726500000004 } from './migrations/1726500000004-window-tolerance';
 import { UsageRecordPurge1726500000005 } from './migrations/1726500000005-usage-record-purge';
+import { ProjectModelAssignment1726500000006 } from './migrations/1726500000006-project-model-assignment';
 
 export function databaseOptions(migrationsRun = false) {
   const url = process.env.DATABASE_URL;
@@ -22,6 +23,7 @@ export function databaseOptions(migrationsRun = false) {
       DetachedModelCosting1726500000003,
       WindowTolerance1726500000004,
       UsageRecordPurge1726500000005,
+      ProjectModelAssignment1726500000006,
     ],
     migrationsRun,
     synchronize: false,

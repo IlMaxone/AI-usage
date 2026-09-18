@@ -295,9 +295,11 @@ dashboard statiche esistenti.
 L'applicazione aggiunge autenticazione JWT, progetti per utente, upload dal
 browser e rilevazioni con uno screenshot o con coppia inizio/fine. I profili
 economici dei modelli sono separati dall'OCR e possono essere applicati a
-posteriori allo stesso storico. Il consumo massimo della finestra 5h e il costo
-al minuto determinano il minutaggio disponibile, il costo attribuito e i
-relativi limiti. Nell'archivio web, l'eliminazione confermata di una rilevazione
+posteriori allo stesso storico; ogni progetto può avere il proprio modello,
+modificabile liberamente dalla UI. Il consumo massimo della finestra 5h e il
+costo al minuto determinano il minutaggio equivalente e il costo attribuito.
+Il calcolo è lineare e non applica cap a usage, minuti o costo. Nell'archivio
+web, l'eliminazione confermata di una rilevazione
 rimuove anche file, hash e dati OCR collegati, permettendo di ricaricare lo
 screenshot nel progetto corretto. Le istruzioni di avvio e il modello dati sono
 documentati nel README dedicato.

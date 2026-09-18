@@ -1,28 +1,31 @@
 import { Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Post } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsHexColor, IsOptional, IsString, Length } from 'class-validator';
+import { IsHexColor, IsOptional, IsString, IsUUID, Length } from 'class-validator';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuthUser, CurrentUser } from './common';
-import { ProjectEntity, UploadEntity } from './entities';
+import { AiModelEntity, ProjectEntity, UploadEntity } from './entities';
 import { projectFolderName, uploadDir } from './storage';
 
 class ProjectDto {
   @IsString() @Length(1, 100) name!: string;
   @IsOptional() @IsHexColor() color?: string;
+  @IsOptional() @IsUUID() modelId?: string;
 }
 
 class UpdateProjectDto {
   @IsOptional() @IsString() @Length(1, 100) name?: string;
   @IsOptional() @IsHexColor() color?: string;
+  @IsOptional() @IsUUID() modelId?: string;
 }
 
 @Controller('projects')
 export class ProjectsController {
   constructor(
     @InjectRepository(ProjectEntity) private readonly projects: Repository<ProjectEntity>,
+    @InjectRepository(AiModelEntity) private readonly models: Repository<AiModelEntity>,
     @InjectRepository(UploadEntity) private readonly uploads: Repository<UploadEntity>,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
@@ -42,7 +45,9 @@ export class ProjectsController {
       .andWhere('lower(project.name) = lower(:name)', { name })
       .getOne();
     if (duplicate) throw new ConflictException('Progetto già presente');
-    const project = await this.projects.save({ ownerId: user.id, name, color: dto.color ?? '#9BE15D' });
+    const modelId = dto.modelId ?? await this.defaultModelId(user.id);
+    if (modelId) await this.ownedModel(modelId, user.id);
+    const project = await this.projects.save({ ownerId: user.id, modelId, name, color: dto.color ?? '#9BE15D' });
     await this.audit.record(user.id, 'PROJECT_CREATED', 'project', project.id);
     return project;
   }
@@ -53,6 +58,10 @@ export class ProjectsController {
     const previousFolder = projectFolderName(project);
     if (dto.name !== undefined) project.name = dto.name.trim();
     if (dto.color !== undefined) project.color = dto.color;
+    if (dto.modelId !== undefined) {
+      await this.ownedModel(dto.modelId, user.id);
+      project.modelId = dto.modelId;
+    }
     const nextFolder = projectFolderName(project);
     const projectUploads = previousFolder === nextFolder
       ? []
@@ -98,5 +107,19 @@ export class ProjectsController {
     const project = await this.projects.findOneBy({ id, ownerId });
     if (!project) throw new NotFoundException('Progetto non trovato');
     return project;
+  }
+
+  private async ownedModel(id: string, ownerId: string) {
+    const model = await this.models.findOneBy({ id, ownerId, supersededAt: IsNull() });
+    if (!model) throw new NotFoundException('Modello non trovato');
+    return model;
+  }
+
+  private async defaultModelId(ownerId: string) {
+    const model = await this.models.findOne({
+      where: { ownerId, supersededAt: IsNull() },
+      order: { isDefault: 'DESC', createdAt: 'ASC' },
+    });
+    return model?.id ?? null;
   }
 }

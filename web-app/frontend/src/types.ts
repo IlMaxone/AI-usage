@@ -1,6 +1,6 @@
 export interface User { id: string; email: string; displayName: string }
 export interface AuthResponse { accessToken: string; expiresIn: string; user: User }
-export interface Project { id: string; name: string; color: string; recordCount?: number; usedPctSum?: number }
+export interface Project { id: string; name: string; color: string; modelId: string | null; recordCount?: number; usedPctSum?: number }
 export interface Pricing {
   currency: 'USD' | 'EUR'; fiveHourWindowCost: number; costPerMinute: number;
 }
@@ -45,20 +45,20 @@ export interface DashboardRecord {
 export interface CostAnalysisItem {
   recordId: string; project: Project | null; mode: 'CONSTANT' | 'SEGMENT'; capturedAt: string;
   fiveHourResetsAt: string | null; usedPct: number; attributedUsedPct: number; elapsedMinutes: number | null;
-  maximumWindowCost: number; maximumUsageMinutes: number | null; estimatedCost: number;
-  estimatedUsageMinutes: number | null; remainingWindowCost: number; cappedByWindow: boolean;
+  windowCostAt100: number; usageMinutesAt100: number | null; estimatedCost: number;
+  estimatedUsageMinutes: number | null;
 }
 export interface CostAnalysisWindow {
-  resetsAt: string | null; records: number; rawUsedPct: number; attributedUsedPct: number; cappedByWindow: boolean;
-  maximumWindowCost: number; maximumUsageMinutes: number | null; estimatedCost: number;
-  estimatedUsageMinutes: number | null; remainingWindowCost: number;
+  resetsAt: string | null; records: number; rawUsedPct: number; attributedUsedPct: number;
+  windowCostAt100: number; usageMinutesAt100: number | null; estimatedCost: number;
+  estimatedUsageMinutes: number | null;
 }
 export interface CostAnalysis {
   model: Pick<AiModel, 'id' | 'provider' | 'name' | 'reasoning' | 'pricing'>;
   summary: {
-    records: number; windows: number; cappedWindows: number; attributedUsedPct: number;
+    records: number; windows: number; attributedUsedPct: number;
     estimatedCost: number; estimatedUsageMinutes: number | null;
-    maximumWindowCost: number; maximumUsageMinutesPerWindow: number | null;
+    windowCostAt100: number; usageMinutesAt100: number | null;
   };
   items: CostAnalysisItem[];
   windows: CostAnalysisWindow[];

@@ -11,6 +11,7 @@ import {
   CalculationRuleEntity,
   FormulaExpression,
   ModelPricing,
+  ProjectEntity,
 } from './entities';
 import { FormulaService } from './formula';
 import { deriveCalibration } from './calibration';
@@ -106,7 +107,7 @@ export class ModelsController {
       if (dto.isDefault ?? current.isDefault) {
         await manager.update(AiModelEntity, { ownerId: user.id, isDefault: true }, { isDefault: false });
       }
-      return manager.save(AiModelEntity, {
+      const replacement = await manager.save(AiModelEntity, {
         ownerId: user.id,
         logicalKey: current.logicalKey,
         version: current.version + 1,
@@ -117,6 +118,8 @@ export class ModelsController {
         pricing: dto.pricing,
         calibration: {},
       });
+      await manager.update(ProjectEntity, { ownerId: user.id, modelId: current.id }, { modelId: replacement.id });
+      return replacement;
     });
     await this.audit.record(user.id, 'MODEL_REVISED', 'model', replacement.id, { replaces: current.id });
     return replacement;
@@ -126,7 +129,10 @@ export class ModelsController {
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     const model = await this.models.findOneBy({ id, ownerId: user.id, supersededAt: IsNull() });
     if (!model) throw new NotFoundException('Modello non trovato');
-    await this.models.softDelete({ id, ownerId: user.id });
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(ProjectEntity, { ownerId: user.id, modelId: id }, { modelId: null });
+      await manager.softDelete(AiModelEntity, { id, ownerId: user.id });
+    });
     await this.audit.record(user.id, 'MODEL_DELETED', 'model', id);
     return { deleted: true };
   }

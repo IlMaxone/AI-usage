@@ -122,6 +122,7 @@ export class AuthController {
       });
       await manager.save(ProjectEntity, {
         ownerId: created.id,
+        modelId: model.id,
         name: 'Generale',
         color: '#9BE15D',
       });

@@ -23,6 +23,7 @@ export class UserEntity {
 export class ProjectEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
+  @Column({ name: 'model_id', type: 'uuid', nullable: true }) modelId!: string | null;
   @Column({ type: 'varchar', length: 100 }) name!: string;
   @Column({ type: 'varchar', length: 7, default: '#9BE15D' }) color!: string;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;

@@ -82,7 +82,12 @@ accodato individualmente alla tripla verifica OCR.
 ## Dashboard, analisi usage e colori
 
 La pagina **La scrivania** è il riepilogo essenziale: per ogni progetto mostra
-soltanto minuti equivalenti e costo stimato secondo il modello economico attivo.
+soltanto minuti equivalenti e costo stimato secondo il modello economico
+assegnato a quel progetto. Il modello si sceglie durante la creazione e si può
+cambiare in qualsiasi momento da **I progetti**; la modifica cambia soltanto lo
+scenario economico e non riscrive screenshot o dati OCR. Se un modello viene
+revisionato, i progetti che lo usavano vengono collegati automaticamente alla
+nuova versione.
 La pagina **Analisi usage** raccoglie invece indicatori complessivi, ultime
 rilevazioni, distribuzione per progetto, crediti extra e il grafico storico a
 punti delle percentuali 5h e settimanali osservate negli screenshot validati.
@@ -145,7 +150,7 @@ pagina **Modelli e conti** si censisce per ogni scenario:
 
 - provider, nome e livello di reasoning;
 - valuta (`EUR` o `USD`);
-- consumo economico massimo consentito nell'intera finestra di 5 ore;
+- costo di riferimento corrispondente al 100% della finestra di 5 ore;
 - costo dichiarato per minuto equivalente consumato.
 
 I due importi accettano sia la virgola sia il punto come separatore decimale,
@@ -154,15 +159,21 @@ valore prima di inviarlo all'API e conserva la precisione utile nei calcoli.
 
 Un modello selezionato viene applicato dinamicamente a tutte le rilevazioni OCR,
 oppure a un solo progetto, senza riscrivere lo storico. Il minutaggio non viene
-più assunto pari a 300 minuti: il massimo disponibile è calcolato come
-`consumo massimo 5h / costo al minuto`. La percentuale OCR consuma la stessa
-quota del massimale economico e del minutaggio derivato.
+più assunto pari a 300 minuti: il riferimento al 100% è calcolato come
+`costo finestra 5h / costo al minuto`. La percentuale attribuita scala
+linearmente sia il costo sia il minutaggio derivato.
 
 Le rilevazioni vengono raggruppate per reset 5h, mantenendo la tolleranza di
-un'ora. Se la somma grezza supera il 100%, l'attribuzione della finestra viene
-ridotta proporzionalmente: il costo non può superare il massimale configurato e
-i minuti non possono superare quelli acquistabili con quel massimale. Cambiando
-modello si ottiene immediatamente un nuovo scenario sugli stessi dati OCR.
+un'ora. Gli screenshot singoli nella stessa finestra sono letture cumulative:
+la prima conserva il valore letto e le successive attribuiscono soltanto
+l'incremento cronologico (per esempio `88%` seguito da `100%` attribuisce
+`88% + 12%`). I segmenti inizio/fine sono già delta e restano invariati.
+
+Il motore non applica alcun cap. Se dati inseriti in buona fede portano il totale
+attribuito oltre il 100%, usage, minuti e costo proseguono linearmente senza
+essere ridotti o troncati. Il costo configurato per la finestra è quindi un
+riferimento al 100%, non un massimale. Cambiando il modello del progetto si
+ottiene subito un nuovo scenario sugli stessi dati OCR.
 
 ## Verifiche locali
 
