@@ -13,4 +13,12 @@ describe('calculateModelCost', () => {
       difference: 5,
     });
   });
+
+  it('preserva una tariffa al minuto ad alta precisione nei calcoli', () => {
+    expect(calculateModelCost(1, {
+      currency: 'EUR',
+      fiveHourWindowCost: 0,
+      costPerMinute: 0.1454545454545455,
+    }).minuteBasedCost).toBe(0.43636363636364);
+  });
 });

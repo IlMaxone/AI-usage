@@ -21,9 +21,9 @@ export function calculateModelCost(usedPct: number, pricing: ModelPricing) {
   const minuteBasedCost = equivalentUsageMinutes * Number(pricing.costPerMinute);
   return {
     equivalentUsageMinutes: round(equivalentUsageMinutes, 2),
-    windowBasedCost: round(windowBasedCost, 6),
-    minuteBasedCost: round(minuteBasedCost, 6),
-    difference: round(minuteBasedCost - windowBasedCost, 6),
+    windowBasedCost: round(windowBasedCost, 14),
+    minuteBasedCost: round(minuteBasedCost, 14),
+    difference: round(minuteBasedCost - windowBasedCost, 14),
   };
 }
 
@@ -127,9 +127,9 @@ export class CostAnalysisController {
         records: items.length,
         usedPct: round(totals.usedPct, 2),
         equivalentUsageMinutes: round(totals.equivalentUsageMinutes, 2),
-        windowBasedCost: round(totals.windowBasedCost, 6),
-        minuteBasedCost: round(totals.minuteBasedCost, 6),
-        difference: round(totals.minuteBasedCost - totals.windowBasedCost, 6),
+        windowBasedCost: round(totals.windowBasedCost, 14),
+        minuteBasedCost: round(totals.minuteBasedCost, 14),
+        difference: round(totals.minuteBasedCost - totals.windowBasedCost, 14),
       },
       items,
     };

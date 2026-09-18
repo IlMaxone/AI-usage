@@ -8,6 +8,7 @@ import { AiModel, CostAnalysis, Dashboard, GalleryUpload, Project, Reading, Usag
 
 type Tab = 'overview' | 'projects' | 'insert' | 'records' | 'analysis' | 'models';
 type AnalysisImage = GalleryUpload & { url: string };
+const localizedDecimalPattern = /^(?:0|[1-9]\d*)(?:[.,]\d+)?$/;
 
 function localDateTime(value: Date | string = new Date()) {
   const date = new Date(value);
@@ -83,8 +84,8 @@ export class AppComponent implements OnDestroy {
     name: new FormControl('', { nonNullable: true, validators: Validators.required }),
     reasoning: new FormControl('high', { nonNullable: true, validators: Validators.required }),
     currency: new FormControl<'USD' | 'EUR'>('USD', { nonNullable: true }),
-    fiveHourWindowCost: new FormControl(0, { nonNullable: true, validators: Validators.min(0) }),
-    costPerMinute: new FormControl(0, { nonNullable: true, validators: Validators.min(0) }),
+    fiveHourWindowCost: new FormControl('0', { nonNullable: true, validators: [Validators.required, Validators.pattern(localizedDecimalPattern)] }),
+    costPerMinute: new FormControl('0', { nonNullable: true, validators: [Validators.required, Validators.pattern(localizedDecimalPattern)] }),
     isDefault: new FormControl(false, { nonNullable: true }),
   });
   readonly creditsForm = new FormGroup({
@@ -237,8 +238,14 @@ export class AppComponent implements OnDestroy {
   createModel() {
     if (this.modelForm.invalid) return;
     const value = this.modelForm.getRawValue();
+    const fiveHourWindowCost = this.parseLocalizedDecimal(value.fiveHourWindowCost);
+    const costPerMinute = this.parseLocalizedDecimal(value.costPerMinute);
+    if (!Number.isFinite(fiveHourWindowCost) || !Number.isFinite(costPerMinute)) {
+      this.error.set('Inserisci costi validi, usando la virgola o il punto come separatore decimale.');
+      return;
+    }
     const payload = { provider: value.provider, name: value.name, reasoning: value.reasoning, isDefault: value.isDefault, pricing: {
-      currency: value.currency, fiveHourWindowCost: Number(value.fiveHourWindowCost), costPerMinute: Number(value.costPerMinute),
+      currency: value.currency, fiveHourWindowCost, costPerMinute,
     } };
     const request = this.editingModelId()
       ? this.api.updateModel(this.editingModelId()!, payload)
@@ -255,14 +262,14 @@ export class AppComponent implements OnDestroy {
       name: model.name,
       reasoning: model.reasoning,
       currency: model.pricing.currency,
-      fiveHourWindowCost: Number(model.pricing.fiveHourWindowCost),
-      costPerMinute: Number(model.pricing.costPerMinute),
+      fiveHourWindowCost: this.formatLocalizedDecimal(model.pricing.fiveHourWindowCost),
+      costPerMinute: this.formatLocalizedDecimal(model.pricing.costPerMinute),
       isDefault: model.isDefault,
     });
   }
   cancelModelEdit() {
     this.editingModelId.set(null);
-    this.modelForm.reset({ provider: 'OpenAI', name: '', reasoning: 'high', currency: 'USD', fiveHourWindowCost: 0, costPerMinute: 0, isDefault: false });
+    this.modelForm.reset({ provider: 'OpenAI', name: '', reasoning: 'high', currency: 'USD', fiveHourWindowCost: '0', costPerMinute: '0', isDefault: false });
   }
   selectCostModel(modelId: string) {
     this.costModelId.set(modelId); this.loadCostAnalysis();
@@ -355,6 +362,12 @@ export class AppComponent implements OnDestroy {
     if (!models.some((model) => model.id === this.costModelId())) {
       this.costModelId.set(models.find((item) => item.isDefault)?.id || models[0]?.id || '');
     }
+  }
+  private parseLocalizedDecimal(value: string) {
+    return Number(value.trim().replace(',', '.'));
+  }
+  private formatLocalizedDecimal(value: number) {
+    return Number(value).toLocaleString('it-IT', { useGrouping: false, maximumFractionDigits: 20 });
   }
   private clearFeedback() { this.message.set(''); this.error.set(''); }
   private succeed(message: string) { this.error.set(''); this.message.set(message); }

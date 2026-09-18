@@ -109,6 +109,10 @@ pagina **Modelli e conti** si censisce per ogni scenario:
 - costo dichiarato dell'intera finestra di 5 ore;
 - costo dichiarato per minuto equivalente consumato.
 
+I due importi accettano sia la virgola sia il punto come separatore decimale,
+anche con molte cifre (per esempio `0,1454545454545455`). L'app normalizza il
+valore prima di inviarlo all'API e conserva la precisione utile nei calcoli.
+
 Un modello selezionato viene applicato dinamicamente a tutte le rilevazioni OCR,
 oppure a un solo progetto, senza riscrivere lo storico. L'usage percentuale viene
 convertito in minuti equivalenti su 300 minuti. La UI presenta due stime
