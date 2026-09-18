@@ -210,7 +210,7 @@ export class ModelsController {
 
   private validatePricing(pricing: ModelPricing) {
     if (!pricing || !['USD', 'EUR'].includes(pricing.currency)) throw new NotFoundException('Valuta non valida');
-    for (const key of ['inputPerMillion', 'cachedInputPerMillion', 'outputPerMillion'] as const) {
+    for (const key of ['fiveHourWindowCost', 'costPerMinute'] as const) {
       if (!Number.isFinite(pricing[key]) || pricing[key] < 0) throw new NotFoundException(`Prezzo non valido: ${key}`);
     }
   }

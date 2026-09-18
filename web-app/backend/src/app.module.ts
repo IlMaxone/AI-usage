@@ -7,6 +7,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditService } from './audit.service';
 import { AuthController, JwtAuthGuard, JwtStrategy } from './auth';
 import { databaseOptions } from './database';
+import { CostAnalysisController } from './cost-analysis';
 import { DashboardController, ExtraCreditsController } from './dashboard';
 import { ENTITIES } from './entities';
 import { FormulaService } from './formula';
@@ -32,6 +33,7 @@ import { RecordsController } from './records';
     HealthController,
     ProjectsController,
     ModelsController,
+    CostAnalysisController,
     RecordsController,
     DashboardController,
     ExtraCreditsController,

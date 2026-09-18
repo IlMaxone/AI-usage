@@ -31,9 +31,11 @@ export class ProjectEntity {
 
 export interface ModelPricing {
   currency: 'USD' | 'EUR';
-  inputPerMillion: number;
-  cachedInputPerMillion: number;
-  outputPerMillion: number;
+  fiveHourWindowCost: number;
+  costPerMinute: number;
+  inputPerMillion?: number;
+  cachedInputPerMillion?: number;
+  outputPerMillion?: number;
   creditsPerMillionInput?: number;
   creditsPerMillionCachedInput?: number;
   creditsPerMillionOutput?: number;
@@ -110,7 +112,7 @@ export class UsageRecordEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
   @Column({ name: 'project_id', type: 'uuid' }) projectId!: string;
-  @Column({ name: 'model_id', type: 'uuid' }) modelId!: string;
+  @Column({ name: 'model_id', type: 'uuid', nullable: true }) modelId!: string | null;
   @Column({ type: 'varchar', length: 12 }) mode!: UsageRecordMode;
   @Column({ type: 'varchar', length: 20, default: 'DRAFT' }) status!: UsageRecordStatus;
   @Column({ name: 'single_upload_id', type: 'uuid', nullable: true }) singleUploadId!: string | null;

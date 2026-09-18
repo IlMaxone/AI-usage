@@ -286,7 +286,10 @@ async function refreshRecordStatus(recordId: string | null): Promise<void> {
       const byUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
       const start = byUpload.get(record.startUploadId);
       const end = byUpload.get(record.endUploadId);
-      if (start && end && start.fiveHourResetsAt.getTime() !== end.fiveHourResetsAt.getTime()) {
+      const resetOffsetMs = start && end
+        ? Math.abs(start.fiveHourResetsAt.getTime() - end.fiveHourResetsAt.getTime())
+        : 0;
+      if (start && end && resetOffsetMs > 60 * 60_000) {
         status = 'MANUAL_REVIEW';
       }
     }

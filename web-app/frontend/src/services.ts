@@ -2,7 +2,7 @@ import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
 import { tap } from 'rxjs';
 import { API_URL } from './api-url';
-import { AiModel, AuthResponse, Dashboard, GalleryUpload, Project, UsageRecord, User } from './types';
+import { AiModel, AuthResponse, CostAnalysis, Dashboard, GalleryUpload, Project, UsageRecord, User } from './types';
 
 const TOKEN_KEY = 'ai-usage-token';
 const USER_KEY = 'ai-usage-user';
@@ -51,6 +51,12 @@ export class ApiService {
   deleteRecord(id: string) { return this.http.delete(`${API_URL}/records/${id}`); }
   models() { return this.http.get<AiModel[]>(`${API_URL}/models`); }
   createModel(payload: object) { return this.http.post<AiModel>(`${API_URL}/models`, payload); }
+  updateModel(id: string, payload: object) { return this.http.patch<AiModel>(`${API_URL}/models/${id}`, payload); }
+  costAnalysis(modelId: string, projectId?: string) {
+    return this.http.get<CostAnalysis>(`${API_URL}/cost-analysis/${modelId}`, {
+      params: projectId ? { projectId } : {},
+    });
+  }
   createRule(modelId: string, payload: object) { return this.http.post(`${API_URL}/models/${modelId}/rules`, payload); }
   addCalibration(modelId: string, payload: object) { return this.http.post(`${API_URL}/models/${modelId}/calibrations`, payload); }
   addCredits(payload: object) { return this.http.post(`${API_URL}/extra-credits`, payload); }

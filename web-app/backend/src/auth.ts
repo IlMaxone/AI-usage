@@ -99,9 +99,8 @@ export class AuthController {
         isDefault: true,
         pricing: {
           currency: 'USD',
-          inputPerMillion: 0,
-          cachedInputPerMillion: 0,
-          outputPerMillion: 0,
+          fiveHourWindowCost: 0,
+          costPerMinute: 0,
         },
         calibration: {},
       });

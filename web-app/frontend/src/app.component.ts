@@ -4,7 +4,7 @@ import { Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { forkJoin, map, of, switchMap, tap } from 'rxjs';
 import { ApiService, AuthService } from './services';
-import { AiModel, Dashboard, GalleryUpload, Project, Reading, UsageRecord } from './types';
+import { AiModel, CostAnalysis, Dashboard, GalleryUpload, Project, Reading, UsageRecord } from './types';
 
 type Tab = 'overview' | 'projects' | 'insert' | 'records' | 'analysis' | 'models';
 type AnalysisImage = GalleryUpload & { url: string };
@@ -33,7 +33,12 @@ export class AppComponent implements OnDestroy {
   readonly projects = signal<Project[]>([]);
   readonly records = signal<UsageRecord[]>([]);
   readonly models = signal<AiModel[]>([]);
+  readonly costAnalysis = signal<CostAnalysis | null>(null);
+  readonly costAnalysisLoading = signal(false);
+  readonly costModelId = signal('');
+  readonly costProjectId = signal('');
   readonly editingProjectId = signal<string | null>(null);
+  readonly editingModelId = signal<string | null>(null);
   readonly correctionTarget = signal<{ recordId: string; uploadId: string; label: string } | null>(null);
   readonly selectedFiles = signal<Record<'single' | 'start' | 'end', { name: string; size: string } | null>>({ single: null, start: null, end: null });
   readonly uploadFeedback = signal('');
@@ -63,7 +68,6 @@ export class AppComponent implements OnDestroy {
   });
   readonly recordForm = new FormGroup({
     projectId: new FormControl('', { nonNullable: true, validators: Validators.required }),
-    modelId: new FormControl('', { nonNullable: true, validators: Validators.required }),
     mode: new FormControl<'CONSTANT' | 'SEGMENT'>('CONSTANT', { nonNullable: true }),
     note: new FormControl('', { nonNullable: true }),
   });
@@ -79,28 +83,9 @@ export class AppComponent implements OnDestroy {
     name: new FormControl('', { nonNullable: true, validators: Validators.required }),
     reasoning: new FormControl('high', { nonNullable: true, validators: Validators.required }),
     currency: new FormControl<'USD' | 'EUR'>('USD', { nonNullable: true }),
-    input: new FormControl(0, { nonNullable: true, validators: Validators.min(0) }),
-    cached: new FormControl(0, { nonNullable: true, validators: Validators.min(0) }),
-    output: new FormControl(0, { nonNullable: true, validators: Validators.min(0) }),
-  });
-  readonly calibrationForm = new FormGroup({
-    modelId: new FormControl('', { nonNullable: true, validators: Validators.required }),
-    observedUsagePct: new FormControl(50, { nonNullable: true, validators: [Validators.min(.01), Validators.max(100)] }),
-    observedDurationSeconds: new FormControl(3000, { nonNullable: true, validators: Validators.min(1) }),
-    estimatedBilledEur: new FormControl(0, { nonNullable: true, validators: Validators.min(.0001) }),
-    creditPackCredits: new FormControl(0, { nonNullable: true, validators: Validators.min(1) }),
-    creditPackPaidEur: new FormControl(0, { nonNullable: true, validators: Validators.min(.01) }),
-    pilotReasoning: new FormControl('high', { nonNullable: true, validators: Validators.required }),
-    pilotExecutionMode: new FormControl('standard', { nonNullable: true, validators: Validators.required }),
-    pilotDurationSeconds: new FormControl(600, { nonNullable: true, validators: Validators.min(1) }),
-    pilotBilledEur: new FormControl(0, { nonNullable: true, validators: Validators.min(.0001) }),
-    note: new FormControl('', { nonNullable: true }),
-  });
-  readonly ruleForm = new FormGroup({
-    modelId: new FormControl('', { nonNullable: true, validators: Validators.required }),
-    name: new FormControl('Crediti per utilizzo', { nonNullable: true, validators: Validators.required }),
-    outputUnit: new FormControl('crediti', { nonNullable: true, validators: Validators.required }),
-    expression: new FormControl('{\n  "operation": "multiply",\n  "args": [\n    { "operation": "divide", "args": [{ "variable": "usedPct" }, 100] },\n    { "variable": "fullWindowCredits" }\n  ]\n}', { nonNullable: true, validators: Validators.required }),
+    fiveHourWindowCost: new FormControl(0, { nonNullable: true, validators: Validators.min(0) }),
+    costPerMinute: new FormControl(0, { nonNullable: true, validators: Validators.min(0) }),
+    isDefault: new FormControl(false, { nonNullable: true }),
   });
   readonly creditsForm = new FormGroup({
     credits: new FormControl(0, { nonNullable: true, validators: Validators.min(1) }),
@@ -119,6 +104,7 @@ export class AppComponent implements OnDestroy {
       this.analysisProjectId.set(this.analysisProjectId() || this.projects()[0]?.id || '');
       this.loadAnalysisImages();
     }
+    if (tab === 'models') this.loadCostAnalysis();
   }
 
   submitAuth() {
@@ -130,7 +116,7 @@ export class AppComponent implements OnDestroy {
   }
   logout() {
     this.releaseAnalysisImages(); this.auth.logout(); this.dashboard.set(null);
-    this.projects.set([]); this.records.set([]); this.models.set([]);
+    this.projects.set([]); this.records.set([]); this.models.set([]); this.costAnalysis.set(null);
   }
   refresh(preserveFeedback = false) {
     this.loading.set(true); if (!preserveFeedback) this.clearFeedback();
@@ -138,6 +124,7 @@ export class AppComponent implements OnDestroy {
       next: ({ dashboard, projects, records, models }) => {
         this.dashboard.set(dashboard); this.projects.set(projects); this.records.set(records); this.models.set(models);
         this.applyDefaults(projects, models); this.loading.set(false);
+        if (this.tab() === 'models') this.loadCostAnalysis();
       },
       error: (error) => this.fail(error),
     });
@@ -191,7 +178,7 @@ export class AppComponent implements OnDestroy {
     if (value.mode === 'CONSTANT' && !this.singleFile) { this.error.set('Seleziona lo screenshot della rilevazione.'); return; }
     if (value.mode === 'SEGMENT' && (!this.startFile || !this.endFile)) { this.error.set('Seleziona sia lo screenshot iniziale sia quello finale.'); return; }
     const body = new FormData();
-    body.append('projectId', value.projectId); body.append('modelId', value.modelId); body.append('mode', value.mode);
+    body.append('projectId', value.projectId); body.append('mode', value.mode);
     if (value.note) body.append('note', value.note);
     if (value.mode === 'CONSTANT') body.append('single', this.singleFile!);
     else { body.append('start', this.startFile!); body.append('end', this.endFile!); }
@@ -250,27 +237,46 @@ export class AppComponent implements OnDestroy {
   createModel() {
     if (this.modelForm.invalid) return;
     const value = this.modelForm.getRawValue();
-    this.api.createModel({ provider: value.provider, name: value.name, reasoning: value.reasoning, pricing: {
-      currency: value.currency, inputPerMillion: Number(value.input), cachedInputPerMillion: Number(value.cached), outputPerMillion: Number(value.output),
-    } }).subscribe({ next: () => { this.modelForm.controls.name.setValue(''); this.succeed('Modello creato.'); this.refresh(true); }, error: (error) => this.fail(error) });
+    const payload = { provider: value.provider, name: value.name, reasoning: value.reasoning, isDefault: value.isDefault, pricing: {
+      currency: value.currency, fiveHourWindowCost: Number(value.fiveHourWindowCost), costPerMinute: Number(value.costPerMinute),
+    } };
+    const request = this.editingModelId()
+      ? this.api.updateModel(this.editingModelId()!, payload)
+      : this.api.createModel(payload);
+    request.subscribe({
+      next: () => { this.cancelModelEdit(); this.succeed('Modello salvato.'); this.refresh(true); },
+      error: (error) => this.fail(error),
+    });
   }
-  addCalibration() {
-    if (this.calibrationForm.invalid) return;
-    const value = this.calibrationForm.getRawValue();
-    this.api.addCalibration(value.modelId, {
-      observedUsagePct: Number(value.observedUsagePct), observedDurationSeconds: Number(value.observedDurationSeconds),
-      estimatedBilledEur: Number(value.estimatedBilledEur), creditPackCredits: Number(value.creditPackCredits),
-      creditPackPaidEur: Number(value.creditPackPaidEur), pilotReasoning: value.pilotReasoning,
-      pilotExecutionMode: value.pilotExecutionMode, pilotDurationSeconds: Number(value.pilotDurationSeconds),
-      pilotBilledEur: Number(value.pilotBilledEur), note: value.note || undefined,
-    }).subscribe({ next: () => { this.succeed('Osservazione append-only registrata.'); this.refresh(true); }, error: (error) => this.fail(error) });
+  editModel(model: AiModel) {
+    this.editingModelId.set(model.id);
+    this.modelForm.setValue({
+      provider: model.provider,
+      name: model.name,
+      reasoning: model.reasoning,
+      currency: model.pricing.currency,
+      fiveHourWindowCost: Number(model.pricing.fiveHourWindowCost),
+      costPerMinute: Number(model.pricing.costPerMinute),
+      isDefault: model.isDefault,
+    });
   }
-  createRule() {
-    if (this.ruleForm.invalid) return;
-    const value = this.ruleForm.getRawValue(); let expression: unknown;
-    try { expression = JSON.parse(value.expression); } catch { this.error.set('Il calcolo non è JSON valido.'); return; }
-    this.api.createRule(value.modelId, { name: value.name, outputUnit: value.outputUnit, expression, isDefault: true }).subscribe({
-      next: () => { this.succeed('Calcolo aggiunto.'); this.refresh(true); }, error: (error) => this.fail(error),
+  cancelModelEdit() {
+    this.editingModelId.set(null);
+    this.modelForm.reset({ provider: 'OpenAI', name: '', reasoning: 'high', currency: 'USD', fiveHourWindowCost: 0, costPerMinute: 0, isDefault: false });
+  }
+  selectCostModel(modelId: string) {
+    this.costModelId.set(modelId); this.loadCostAnalysis();
+  }
+  selectCostProject(projectId: string) {
+    this.costProjectId.set(projectId); this.loadCostAnalysis();
+  }
+  loadCostAnalysis() {
+    const modelId = this.costModelId() || this.models().find((item) => item.isDefault)?.id || this.models()[0]?.id;
+    if (!modelId) { this.costAnalysis.set(null); return; }
+    this.costModelId.set(modelId); this.costAnalysisLoading.set(true);
+    this.api.costAnalysis(modelId, this.costProjectId() || undefined).subscribe({
+      next: (analysis) => { this.costAnalysis.set(analysis); this.costAnalysisLoading.set(false); },
+      error: (error) => { this.costAnalysisLoading.set(false); this.fail(error); },
     });
   }
   addCredits() {
@@ -286,6 +292,14 @@ export class AppComponent implements OnDestroy {
   }
   uploadStatus(status: string) {
     return ({ DRAFT: 'Pronto', UPLOADED: 'In coda', PROCESSING: 'OCR in corso', VALIDATED: 'Validato', MANUAL_REVIEW: 'Verifica manuale', FAILED: 'Errore' } as Record<string, string>)[status] ?? status;
+  }
+  weeklySignalLabel(signal: NonNullable<UsageRecord['usage']['alignment']>['weeklyResetSignal']) {
+    return ({
+      SAME_WINDOW: 'reset settimanale coerente',
+      ROLLOVER: 'passaggio alla settimana successiva',
+      SHIFTED: 'reset settimanale spostato, non bloccante',
+      UNAVAILABLE: 'reset settimanale non disponibile',
+    } as const)[signal];
   }
   readings(record: UsageRecord) {
     return record.mode === 'CONSTANT'
@@ -337,10 +351,10 @@ export class AppComponent implements OnDestroy {
   }
   private applyDefaults(projects: Project[], models: AiModel[]) {
     const projectId = this.recordForm.controls.projectId.value || projects[0]?.id || '';
-    const modelId = this.recordForm.controls.modelId.value || models.find((item) => item.isDefault)?.id || models[0]?.id || '';
-    this.recordForm.patchValue({ projectId, modelId });
-    this.ruleForm.controls.modelId.setValue(this.ruleForm.controls.modelId.value || modelId);
-    this.calibrationForm.controls.modelId.setValue(this.calibrationForm.controls.modelId.value || modelId);
+    this.recordForm.patchValue({ projectId });
+    if (!models.some((model) => model.id === this.costModelId())) {
+      this.costModelId.set(models.find((item) => item.isDefault)?.id || models[0]?.id || '');
+    }
   }
   private clearFeedback() { this.message.set(''); this.error.set(''); }
   private succeed(message: string) { this.error.set(''); this.message.set(message); }

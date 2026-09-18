@@ -46,8 +46,12 @@ predefinito `GPT-5.6 Sol` e reasoning `high`.
 4. In caso di disaccordo l'immagine resta in `manual_review`; non viene creato
    alcuno snapshot di utilizzo e non viene salvato il testo OCR completo.
 5. Un singolo screenshot conserva l'usage corrente. Una coppia inizio/fine
-   valida nella stessa finestra di 5 ore attribuisce al progetto il delta tra
-   le due percentuali; reset differenti richiedono correzione manuale.
+   attribuisce al progetto il delta tra le due percentuali quando gli orari di
+   reset 5h differiscono al massimo di 60 minuti. Il reset settimanale viene
+   usato come segnale di coerenza (`stessa finestra`, `rollover` o `spostato`),
+   ma non blocca la misura: al cambio settimana può infatti saltare in avanti
+   o mostrare una data inattesa. Oltre un'ora di scarto sul reset 5h il segmento
+   richiede verifica manuale.
 6. I valori possono essere corretti dalla UI. La correzione è append-only e
    non sovrascrive lo snapshot OCR originale. La rilevazione può essere rimossa
    dalla vista mantenendo audit e dati tecnici tracciabili.
@@ -82,7 +86,8 @@ upload.
 ## Integrità e privacy
 
 - progetti e rilevazioni sono cancellati logicamente e restano nell'audit;
-- modelli e formule vengono revisionati: una modifica crea una nuova versione;
+- i profili economici dei modelli sono separati dai record OCR; una revisione
+  crea una nuova versione senza alterare percentuali e screenshot storici;
 - osservazioni di fatturazione e acquisti extra sono append-only; i valori
   calibrati vengono derivati dal motore e non salvati come importi osservati;
 - l'audit applicativo è append-only anche a livello SQL;
@@ -93,17 +98,23 @@ upload.
 - gli acquisti extra, quando inseriti, sono dichiarazioni append-only e sono
   considerati interamente spesi con residuo zero.
 
-## Calcoli
+## Modelli e analisi dei costi
 
-Le formule sono oggetti JSON versionati e modificabili dalla UI. Il motore
-supporta operazioni aritmetiche in un AST ristretto (`add`, `subtract`,
-`multiply`, `divide`, `min`, `max`) e variabili esplicite; non valuta codice
-JavaScript o SQL inserito dall'utente.
+L'OCR registra soltanto usage, reset e data/ora dello screenshot: il modello non
+viene più scelto durante l'upload e non è incorporato nella rilevazione. Nella
+pagina **Modelli e conti** si censisce per ogni scenario:
 
-Le metriche predefinite mantengono il metodo principale calibrato sulla
-fatturazione e il confronto secondario basato su listino. Per modelli esterni a
-OpenAI si possono configurare prezzi per milione di token, crediti equivalenti
-e una formula personalizzata senza modificare il codice.
+- provider, nome e livello di reasoning;
+- valuta (`EUR` o `USD`);
+- costo dichiarato dell'intera finestra di 5 ore;
+- costo dichiarato per minuto equivalente consumato.
+
+Un modello selezionato viene applicato dinamicamente a tutte le rilevazioni OCR,
+oppure a un solo progetto, senza riscrivere lo storico. L'usage percentuale viene
+convertito in minuti equivalenti su 300 minuti. La UI presenta due stime
+alternative: costo proporzionale della finestra e costo per minuti equivalenti,
+oltre al loro scostamento. Le due stime non vengono sommate. Cambiando modello si
+ottiene immediatamente un nuovo scenario sugli stessi dati OCR.
 
 ## Verifiche locali
 

@@ -282,6 +282,8 @@ il processo locale descritto sopra e non modifica i registri JSONL o le
 dashboard statiche esistenti.
 
 L'applicazione aggiunge autenticazione JWT, progetti per utente, upload dal
-browser, eventi con snapshot opzionali di inizio/fine, modelli configurabili e
-formule versionate. Le istruzioni di avvio e il modello dati sono documentati
-nel README dedicato.
+browser e rilevazioni con uno screenshot o con coppia inizio/fine. I profili
+economici dei modelli sono separati dall'OCR e possono essere applicati a
+posteriori allo stesso storico per confrontare costo proporzionale della
+finestra 5h e costo al minuto equivalente. Le istruzioni di avvio e il modello
+dati sono documentati nel README dedicato.

@@ -2,8 +2,7 @@ export interface User { id: string; email: string; displayName: string }
 export interface AuthResponse { accessToken: string; expiresIn: string; user: User }
 export interface Project { id: string; name: string; color: string; recordCount?: number; usedPctSum?: number }
 export interface Pricing {
-  currency: 'USD' | 'EUR'; inputPerMillion: number; cachedInputPerMillion: number; outputPerMillion: number;
-  creditsPerMillionInput?: number; creditsPerMillionCachedInput?: number; creditsPerMillionOutput?: number;
+  currency: 'USD' | 'EUR'; fiveHourWindowCost: number; costPerMinute: number;
 }
 export interface DerivedCalibration { fullWindowCredits: number; fullWindowEur: number; fullWindowPilotMinutes: number; eurPerCredit: number; pilotEurPerMinute: number }
 export interface Calibration { id: string; recordedAt: string; derived: DerivedCalibration }
@@ -12,7 +11,10 @@ export interface AiModel {
   id: string; provider: string; name: string; reasoning: string; isDefault: boolean; version: number;
   pricing: Pricing; rules: Rule[]; latestCalibration: Calibration | null;
 }
-export interface UsageResult { status: 'MEASURED' | 'SEGMENT_MEASURED' | 'WAITING_FOR_OCR' | 'WINDOW_MISMATCH'; usedPct: number | null }
+export interface UsageResult {
+  status: 'MEASURED' | 'SEGMENT_MEASURED' | 'WAITING_FOR_OCR' | 'WINDOW_MISMATCH'; usedPct: number | null;
+  alignment?: { fiveHourResetOffsetMinutes: number; weeklyResetSignal: 'SAME_WINDOW' | 'ROLLOVER' | 'SHIFTED' | 'UNAVAILABLE' };
+}
 export interface UsageSnapshot {
   capturedAt: string;
   fiveHourRemainingPct: number; fiveHourUsedPct: number; fiveHourResetsAt: string;
@@ -28,15 +30,24 @@ export interface Reading {
   effectiveSnapshot: UsageSnapshot | null;
 }
 export interface UsageRecord {
-  id: string; projectId: string; modelId: string; mode: 'CONSTANT' | 'SEGMENT';
+  id: string; projectId: string; modelId: string | null; mode: 'CONSTANT' | 'SEGMENT';
   status: 'DRAFT' | 'VALIDATING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
-  note: string | null; createdAt: string; project: Project | null; model: AiModel | null;
+  note: string | null; createdAt: string; project: Project | null;
   single: Reading | null; start: Reading | null; end: Reading | null; usage: UsageResult;
 }
 export interface DashboardRecord {
   id: string; mode: 'CONSTANT' | 'SEGMENT'; status: UsageRecord['status']; createdAt: string; capturedAt: string | null;
-  project: Project | null; model: Pick<AiModel, 'id'|'name'|'provider'|'reasoning'> | null;
-  usage: UsageResult; calculated: { value: number; unit: string; ruleName: string } | null;
+  project: Project | null; usage: UsageResult;
+}
+export interface CostAnalysisItem {
+  recordId: string; project: Project | null; mode: 'CONSTANT' | 'SEGMENT'; capturedAt: string;
+  usedPct: number; elapsedMinutes: number | null; equivalentUsageMinutes: number;
+  windowBasedCost: number; minuteBasedCost: number; difference: number;
+}
+export interface CostAnalysis {
+  model: Pick<AiModel, 'id' | 'provider' | 'name' | 'reasoning' | 'pricing'>;
+  summary: Omit<CostAnalysisItem, 'recordId' | 'project' | 'mode' | 'capturedAt' | 'elapsedMinutes'> & { records: number };
+  items: CostAnalysisItem[];
 }
 export interface GalleryUpload {
   id: string; recordId: string | null; role: 'SINGLE' | 'START' | 'END'; originalName: string;

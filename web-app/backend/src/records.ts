@@ -28,7 +28,6 @@ import { DataSource, In, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuthUser, CurrentUser } from './common';
 import {
-  AiModelEntity,
   AuditEventEntity,
   CaptureTimeObservationEntity,
   ProjectEntity,
@@ -42,7 +41,6 @@ import { incomingDir, projectFolderName, relativeStorageKey, resolveStoredFile, 
 
 class CreateRecordDto {
   @IsUUID() projectId!: string;
-  @IsUUID() modelId!: string;
   @IsIn(['CONSTANT', 'SEGMENT']) mode!: UsageRecordMode;
   @IsOptional() @IsString() @Length(0, 2000) note?: string;
 }
@@ -58,6 +56,24 @@ class CorrectionDto {
 export interface SnapshotInput {
   fiveHourUsedPct: number | string;
   fiveHourResetsAt: Date | string;
+  weeklyUsedPct?: number | string;
+  weeklyResetsOn?: Date | string;
+}
+
+const FIVE_HOUR_RESET_TOLERANCE_MS = 60 * 60_000;
+
+function weeklyResetSignal(start: SnapshotInput, end: SnapshotInput) {
+  if (!start.weeklyResetsOn || !end.weeklyResetsOn) return 'UNAVAILABLE' as const;
+  const startReset = new Date(start.weeklyResetsOn).getTime();
+  const endReset = new Date(end.weeklyResetsOn).getTime();
+  if (!Number.isFinite(startReset) || !Number.isFinite(endReset)) return 'UNAVAILABLE' as const;
+  if (startReset === endReset) return 'SAME_WINDOW' as const;
+  const startUsed = Number(start.weeklyUsedPct);
+  const endUsed = Number(end.weeklyUsedPct);
+  if (endReset > startReset && Number.isFinite(startUsed) && Number.isFinite(endUsed) && endUsed <= startUsed) {
+    return 'ROLLOVER' as const;
+  }
+  return 'SHIFTED' as const;
 }
 
 export function computeRecordUsage(
@@ -72,12 +88,20 @@ export function computeRecordUsage(
       : { status: 'WAITING_FOR_OCR' as const, usedPct: null };
   }
   if (!start || !end) return { status: 'WAITING_FOR_OCR' as const, usedPct: null };
-  if (new Date(start.fiveHourResetsAt).getTime() !== new Date(end.fiveHourResetsAt).getTime()) {
-    return { status: 'WINDOW_MISMATCH' as const, usedPct: null };
+  const resetOffsetMinutes = Math.abs(
+    new Date(end.fiveHourResetsAt).getTime() - new Date(start.fiveHourResetsAt).getTime(),
+  ) / 60_000;
+  const alignment = {
+    fiveHourResetOffsetMinutes: Math.round(resetOffsetMinutes * 100) / 100,
+    weeklyResetSignal: weeklyResetSignal(start, end),
+  };
+  if (!Number.isFinite(resetOffsetMinutes) || resetOffsetMinutes * 60_000 > FIVE_HOUR_RESET_TOLERANCE_MS) {
+    return { status: 'WINDOW_MISMATCH' as const, usedPct: null, alignment };
   }
   return {
     status: 'SEGMENT_MEASURED' as const,
     usedPct: Math.max(0, Number(end.fiveHourUsedPct) - Number(start.fiveHourUsedPct)),
+    alignment,
   };
 }
 
@@ -97,7 +121,6 @@ export class RecordsController {
   constructor(
     @InjectRepository(UsageRecordEntity) private readonly records: Repository<UsageRecordEntity>,
     @InjectRepository(ProjectEntity) private readonly projects: Repository<ProjectEntity>,
-    @InjectRepository(AiModelEntity) private readonly models: Repository<AiModelEntity>,
     @InjectRepository(UploadEntity) private readonly uploads: Repository<UploadEntity>,
     @InjectRepository(UsageSnapshotEntity) private readonly snapshots: Repository<UsageSnapshotEntity>,
     @InjectRepository(UsageCorrectionEntity) private readonly corrections: Repository<UsageCorrectionEntity>,
@@ -197,7 +220,7 @@ export class RecordsController {
     const allFiles = [...(files.single ?? []), ...(files.start ?? []), ...(files.end ?? [])];
     let record: UsageRecordEntity;
     try {
-      const project = await this.validateReferences(user.id, dto.projectId, dto.modelId);
+      const project = await this.validateProject(user.id, dto.projectId);
       const destination = path.join(uploadDir, projectFolderName(project));
       await fs.mkdir(destination, { recursive: true });
       for (const file of allFiles) {
@@ -217,7 +240,7 @@ export class RecordsController {
         const saved = await manager.save(UsageRecordEntity, {
           ownerId: user.id,
           projectId: dto.projectId,
-          modelId: dto.modelId,
+          modelId: null,
           mode: dto.mode,
           status: 'DRAFT',
           note: dto.note?.trim() || null,
@@ -249,7 +272,7 @@ export class RecordsController {
           action: 'USAGE_RECORD_CREATED',
           entityType: 'usage_record',
           entityId: saved.id,
-          metadata: { projectId: dto.projectId, modelId: dto.modelId, mode: dto.mode, files: allFiles.length },
+          metadata: { projectId: dto.projectId, mode: dto.mode, files: allFiles.length },
         });
         return saved;
       });
@@ -340,14 +363,12 @@ export class RecordsController {
   private async enrich(records: UsageRecordEntity[], ownerId: string) {
     const uploadIds = records.flatMap((item) => this.uploadIds(item));
     const projectIds = [...new Set(records.map((item) => item.projectId))];
-    const modelIds = [...new Set(records.map((item) => item.modelId))];
-    const [uploads, snapshots, corrections, captureTimes, projects, models] = await Promise.all([
+    const [uploads, snapshots, corrections, captureTimes, projects] = await Promise.all([
       uploadIds.length ? this.uploads.find({ where: { id: In(uploadIds), ownerId } }) : [],
       uploadIds.length ? this.snapshots.find({ where: { uploadId: In(uploadIds) } }) : [],
       uploadIds.length ? this.corrections.find({ where: { uploadId: In(uploadIds), ownerId }, order: { createdAt: 'DESC' } }) : [],
       uploadIds.length ? this.captureTimes.find({ where: { uploadId: In(uploadIds), ownerId }, order: { createdAt: 'DESC' } }) : [],
       projectIds.length ? this.projects.find({ where: { id: In(projectIds), ownerId }, withDeleted: true }) : [],
-      modelIds.length ? this.models.find({ where: { id: In(modelIds), ownerId }, withDeleted: true }) : [],
     ]);
     const uploadById = new Map(uploads.map((item) => [item.id, item]));
     const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
@@ -356,7 +377,6 @@ export class RecordsController {
     const captureTimeByUpload = new Map<string, CaptureTimeObservationEntity>();
     for (const item of captureTimes) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
     const projectById = new Map(projects.map((item) => [item.id, item]));
-    const modelById = new Map(models.map((item) => [item.id, item]));
     const reading = (uploadId: string | null) => {
       if (!uploadId) return null;
       const upload = uploadById.get(uploadId) ?? null;
@@ -375,7 +395,6 @@ export class RecordsController {
       return {
         ...record,
         project: projectById.get(record.projectId) ?? null,
-        model: modelById.get(record.modelId) ?? null,
         single,
         start,
         end,
@@ -399,13 +418,9 @@ export class RecordsController {
     return record;
   }
 
-  private async validateReferences(ownerId: string, projectId: string, modelId: string) {
-    const [project, model] = await Promise.all([
-      this.projects.findOneBy({ id: projectId, ownerId }),
-      this.models.findOneBy({ id: modelId, ownerId }),
-    ]);
+  private async validateProject(ownerId: string, projectId: string) {
+    const project = await this.projects.findOneBy({ id: projectId, ownerId });
     if (!project) throw new NotFoundException('Progetto non trovato');
-    if (!model) throw new NotFoundException('Modello non trovato');
     return project;
   }
 

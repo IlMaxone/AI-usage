@@ -14,7 +14,29 @@ describe('computeRecordUsage', () => {
       undefined,
       { fiveHourUsedPct: 18, fiveHourResetsAt: reset },
       { fiveHourUsedPct: 43, fiveHourResetsAt: reset },
-    )).toEqual({ status: 'SEGMENT_MEASURED', usedPct: 25 });
+    )).toMatchObject({ status: 'SEGMENT_MEASURED', usedPct: 25 });
+  });
+
+  it('accetta reset 5h disallineati fino a 60 minuti', () => {
+    expect(computeRecordUsage(
+      'SEGMENT',
+      undefined,
+      { fiveHourUsedPct: 18, fiveHourResetsAt: reset, weeklyUsedPct: 50, weeklyResetsOn: '2026-09-21' },
+      { fiveHourUsedPct: 43, fiveHourResetsAt: new Date('2026-09-17T19:00:00.000Z'), weeklyUsedPct: 8, weeklyResetsOn: '2026-09-28' },
+    )).toMatchObject({
+      status: 'SEGMENT_MEASURED',
+      usedPct: 25,
+      alignment: { fiveHourResetOffsetMinutes: 60, weeklyResetSignal: 'ROLLOVER' },
+    });
+  });
+
+  it('non blocca il segmento per un salto anomalo del reset settimanale', () => {
+    expect(computeRecordUsage(
+      'SEGMENT',
+      undefined,
+      { fiveHourUsedPct: 18, fiveHourResetsAt: reset, weeklyUsedPct: 12, weeklyResetsOn: '2026-09-21' },
+      { fiveHourUsedPct: 43, fiveHourResetsAt: reset, weeklyUsedPct: 35, weeklyResetsOn: '2026-09-24' },
+    )).toMatchObject({ status: 'SEGMENT_MEASURED', alignment: { weeklyResetSignal: 'SHIFTED' } });
   });
 
   it('rifiuta il delta tra finestre 5h differenti', () => {
@@ -23,6 +45,6 @@ describe('computeRecordUsage', () => {
       undefined,
       { fiveHourUsedPct: 18, fiveHourResetsAt: reset },
       { fiveHourUsedPct: 43, fiveHourResetsAt: new Date('2026-09-17T23:00:00.000Z') },
-    )).toEqual({ status: 'WINDOW_MISMATCH', usedPct: null });
+    )).toMatchObject({ status: 'WINDOW_MISMATCH', usedPct: null });
   });
 });
