@@ -217,9 +217,54 @@ export class RecordsController {
     @Body() dto: CreateRecordDto,
     @UploadedFiles() files: RecordFiles = {},
   ) {
+    return (await this.persistRecords(user, dto, files, false))[0];
+  }
+
+  @Post('batch')
+  @UseInterceptors(FileFieldsInterceptor(
+    [{ name: 'single', maxCount: 30 }, { name: 'start', maxCount: 30 }, { name: 'end', maxCount: 30 }],
+    {
+      storage: diskStorage({
+        destination: (_request, _file, callback) => {
+          void fs.mkdir(incomingDir, { recursive: true }).then(
+            () => callback(null, incomingDir),
+            (error: unknown) => callback(error as Error, incomingDir),
+          );
+        },
+        filename: (_request, file, callback) => callback(null, `${randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
+      }),
+      limits: { fileSize: Number(process.env.MAX_UPLOAD_BYTES ?? 10_485_760), files: 60 },
+      fileFilter: (_request, file, callback) => callback(null, allowedMime.has(file.mimetype)),
+    },
+  ))
+  async createBatch(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateRecordDto,
+    @UploadedFiles() files: RecordFiles = {},
+  ) {
+    return this.persistRecords(user, dto, files, true);
+  }
+
+  private async persistRecords(user: AuthUser, dto: CreateRecordDto, files: RecordFiles, allowBatch: boolean) {
     const allFiles = [...(files.single ?? []), ...(files.start ?? []), ...(files.end ?? [])];
-    let record: UsageRecordEntity;
+    const singles = files.single ?? [];
+    const starts = files.start ?? [];
+    const ends = files.end ?? [];
+    const batchSize = dto.mode === 'CONSTANT' ? singles.length : starts.length;
+    const records: UsageRecordEntity[] = [];
     try {
+      if (dto.mode === 'CONSTANT' && (!singles.length || starts.length || ends.length || (!allowBatch && singles.length !== 1))) {
+        throw new BadRequestException(allowBatch
+          ? 'Il batch usage costante richiede da 1 a 30 screenshot singoli'
+          : 'Usage costante richiede un solo screenshot');
+      }
+      if (dto.mode === 'SEGMENT' && (
+        !starts.length || !ends.length || singles.length || starts.length !== ends.length || (!allowBatch && starts.length !== 1)
+      )) {
+        throw new BadRequestException(allowBatch
+          ? 'Il batch segmento richiede lo stesso numero di screenshot iniziali e finali, da 1 a 30 coppie'
+          : 'Il segmento di usage richiede screenshot iniziale e finale');
+      }
       const project = await this.validateProject(user.id, dto.projectId);
       const destination = path.join(uploadDir, projectFolderName(project));
       await fs.mkdir(destination, { recursive: true });
@@ -229,58 +274,54 @@ export class RecordsController {
         file.path = movedPath;
         file.filename = relativeStorageKey(movedPath);
       }
-      if (dto.mode === 'CONSTANT' && (!(files.single?.[0]) || allFiles.length !== 1)) {
-        throw new BadRequestException('Usage costante richiede un solo screenshot');
-      }
-      if (dto.mode === 'SEGMENT' && (!(files.start?.[0]) || !(files.end?.[0]) || allFiles.length !== 2)) {
-        throw new BadRequestException('Il segmento di usage richiede screenshot iniziale e finale');
-      }
 
-      record = await this.dataSource.transaction(async (manager) => {
-        const saved = await manager.save(UsageRecordEntity, {
-          ownerId: user.id,
-          projectId: dto.projectId,
-          modelId: null,
-          mode: dto.mode,
-          status: 'DRAFT',
-          note: dto.note?.trim() || null,
-        });
-        const makeUpload = async (file: Express.Multer.File, role: 'SINGLE' | 'START' | 'END') => manager.save(UploadEntity, {
-          ownerId: user.id,
-          projectId: dto.projectId,
-          eventId: null,
-          recordId: saved.id,
-          role,
-          originalName: path.basename(file.originalname).slice(0, 255),
-          storageKey: file.filename,
-          mime: file.mimetype,
-          size: file.size,
-          status: 'DRAFT',
-        });
-        if (dto.mode === 'CONSTANT') {
-          const upload = await makeUpload(files.single![0]!, 'SINGLE');
-          saved.singleUploadId = upload.id;
-        } else {
-          const start = await makeUpload(files.start![0]!, 'START');
-          const end = await makeUpload(files.end![0]!, 'END');
-          saved.startUploadId = start.id;
-          saved.endUploadId = end.id;
+      await this.dataSource.transaction(async (manager) => {
+        for (let index = 0; index < batchSize; index += 1) {
+          const saved = await manager.save(UsageRecordEntity, {
+            ownerId: user.id,
+            projectId: dto.projectId,
+            modelId: null,
+            mode: dto.mode,
+            status: 'DRAFT',
+            note: dto.note?.trim() || null,
+          });
+          const makeUpload = async (file: Express.Multer.File, role: 'SINGLE' | 'START' | 'END') => manager.save(UploadEntity, {
+            ownerId: user.id,
+            projectId: dto.projectId,
+            eventId: null,
+            recordId: saved.id,
+            role,
+            originalName: path.basename(file.originalname).slice(0, 255),
+            storageKey: file.filename,
+            mime: file.mimetype,
+            size: file.size,
+            status: 'DRAFT',
+          });
+          if (dto.mode === 'CONSTANT') {
+            const upload = await makeUpload(singles[index]!, 'SINGLE');
+            saved.singleUploadId = upload.id;
+          } else {
+            const start = await makeUpload(starts[index]!, 'START');
+            const end = await makeUpload(ends[index]!, 'END');
+            saved.startUploadId = start.id;
+            saved.endUploadId = end.id;
+          }
+          await manager.save(UsageRecordEntity, saved);
+          await manager.insert(AuditEventEntity, {
+            ownerId: user.id,
+            action: 'USAGE_RECORD_CREATED',
+            entityType: 'usage_record',
+            entityId: saved.id,
+            metadata: { projectId: dto.projectId, mode: dto.mode, files: dto.mode === 'CONSTANT' ? 1 : 2, batchIndex: index + 1, batchSize },
+          });
+          records.push(saved);
         }
-        await manager.save(UsageRecordEntity, saved);
-        await manager.insert(AuditEventEntity, {
-          ownerId: user.id,
-          action: 'USAGE_RECORD_CREATED',
-          entityType: 'usage_record',
-          entityId: saved.id,
-          metadata: { projectId: dto.projectId, mode: dto.mode, files: allFiles.length },
-        });
-        return saved;
       });
     } catch (error) {
       await Promise.all(allFiles.map((file) => fs.unlink(file.path).catch(() => undefined)));
       throw error;
     }
-    return (await this.enrich([record], user.id))[0];
+    return this.enrich(records, user.id);
   }
 
   @Post(':id/validate')

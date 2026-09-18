@@ -36,8 +36,8 @@ predefinito `GPT-5.6 Sol` e reasoning `high`.
 ## Flusso dati
 
 1. L'utente crea, modifica o elimina liberamente i progetti dalla pagina dedicata.
-2. Dalla pagina Inserimento sceglie `Usage costante` con un solo screenshot,
-   oppure `Segmento di usage` con screenshot iniziale e finale.
+2. Dalla pagina Inserimento sceglie `Batch singolo` con uno o più screenshot,
+   oppure `Batch segmento` con liste abbinate di screenshot iniziali e finali.
 3. Il pulsante `Avvia convalida` mette gli screenshot in coda. Il worker calcola
    SHA-256 ed esegue tre letture OCR locali mirate alla zona usage. Esegue inoltre
    tre letture dell'angolo in basso a destra per data e ora. Una rilevazione è
@@ -58,7 +58,36 @@ predefinito `GPT-5.6 Sol` e reasoning `high`.
 7. Data e ora della rilevazione non dipendono dall'esecuzione OCR: per l'usage
    costante provengono dallo screenshot singolo; per un segmento provengono dallo
    screenshot finale. Eventuali rettifiche temporali storiche sono osservazioni
-   append-only separate e non modificano lo snapshot OCR originale.
+   append-only separate e non modificano lo snapshot OCR originale. Il worker
+   non usa mai l'ora di modifica del file come fallback: senza accordo OCR sul
+   timestamp visibile richiede la verifica manuale.
+
+### Inserimento batch
+
+La stessa pagina accetta fino a 30 batch per invio:
+
+- nel **batch singolo**, ogni immagine crea una rilevazione usage costante
+  autonoma (30 immagini producono 30 record e 30 processamenti OCR);
+- nel **batch segmento**, le liste iniziale e finale devono avere la stessa
+  lunghezza. L'abbinamento è posizionale: inizio 1 con fine 1, inizio 2 con
+  fine 2 e così via. Ogni coppia crea un record e un processamento separato.
+
+Ogni file conserva il limite configurato da `MAX_UPLOAD_BYTES` (10 MB di
+default). Il batch viene creato atomicamente; successivamente ogni record viene
+accodato individualmente alla tripla verifica OCR.
+
+## Dashboard, analisi usage e colori
+
+La pagina **La scrivania** è il riepilogo essenziale: per ogni progetto mostra
+soltanto minuti equivalenti e costo stimato secondo il modello economico attivo.
+La pagina **Analisi usage** raccoglie invece indicatori complessivi, ultime
+rilevazioni, distribuzione per progetto, crediti extra e il grafico storico a
+punti delle percentuali 5h e settimanali osservate negli screenshot validati.
+
+Alla creazione o modifica di un progetto il colore si sceglie da una palette di
+20 tinte coerenti con il tema Warm Workbench. Il verde `#9BE15D` resta il colore
+predefinito. Il colore identifica il progetto soltanto nella UI e non altera i
+dati OCR o i calcoli.
 
 ## Archivio screenshot e pagina Analisi
 
@@ -75,7 +104,11 @@ L'archivio è intenzionalmente escluso da Git e può essere copiato per backup o
 recupero mentre lo stack è fermo; non rinominare a mano cartelle o file, perché
 i nomi tecnici sono collegati al database. La pagina **Analisi immagini** richiede
 la selezione di un progetto alla volta e permette di aprirne le immagini a piena
-dimensione.
+dimensione. Gli upload sono raggruppati per rilevazione: per ogni segmento gli
+screenshot iniziale e finale appaiono nello stesso blocco, nell'ordine del flusso.
+Anche **Archivio usage** mostra sempre un solo progetto alla volta; il pulsante
+**Dettagli screenshot** disponibile sui segmenti apre direttamente il relativo
+blocco nella pagina Analisi immagini.
 Durante la migrazione, eventuali file provenienti da database già azzerati e
 quindi privi di un progetto associabile vengono preservati in
 `storage/uploads/_unassigned/`; non compaiono nella pagina Analisi.

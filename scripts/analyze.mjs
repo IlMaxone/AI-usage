@@ -31,6 +31,7 @@ let projectName = null;
 let dryRun = false;
 let offline = false;
 let verifyProcessed = false;
+let repairCaptureTimes = false;
 let recordExtraCredits = false;
 let purchasedCredits = null;
 let paidEur = null;
@@ -41,6 +42,7 @@ for (let index = 0; index < rawArgs.length; index += 1) {
   if (argument === '--dry-run') dryRun = true;
   else if (argument === '--offline') offline = true;
   else if (argument === '--verify-processed') verifyProcessed = true;
+  else if (argument === '--repair-capture-times') repairCaptureTimes = true;
   else if (argument === '--record-extra-credits') recordExtraCredits = true;
   else if (argument === '--credits') {
     purchasedCredits = rawArgs[index + 1];
@@ -121,6 +123,9 @@ if (recordExtraCredits) {
 } else if (purchasedCredits !== null || paidEur !== null || purchasedAt !== null) {
   throw new Error('--credits, --paid-eur e --purchased-at richiedono --record-extra-credits.');
 }
+if (repairCaptureTimes && !verifyProcessed) {
+  throw new Error('--repair-capture-times richiede --verify-processed.');
+}
 
 const projectsDir = path.join(root, 'projects');
 const projectDir = path.resolve(projectsDir, projectName);
@@ -136,6 +141,7 @@ const reportsDir = path.join(projectDir, 'reports');
 const csvReportsDir = path.join(reportsDir, 'csv');
 const ocrCacheDir = path.join(root, 'ocr-cache');
 const usageDataFile = path.join(historicalDir, 'usage-snapshots.jsonl');
+const captureTimeObservationsFile = path.join(historicalDir, 'capture-time-observations.jsonl');
 const extraCreditDataFile = path.join(historicalDir, 'extra-credit-purchases.jsonl');
 const billingCalibrationDataFile = path.join(historicalDir, 'billing-calibrations.jsonl');
 const pricingDataFile = path.join(internetDir, 'pricing-snapshots.jsonl');
@@ -204,6 +210,58 @@ async function readJsonLines(file) {
 
 async function appendJsonLine(file, value) {
   await fs.appendFile(file, JSON.stringify(value) + '\n', 'utf8');
+}
+
+function latestCaptureObservations(observations) {
+  const byHash = new Map();
+  for (const observation of observations) byHash.set(observation.imageSha256, observation);
+  return byHash;
+}
+
+function applyCaptureTimeObservations(usages, observations) {
+  const byHash = latestCaptureObservations(observations);
+  return usages.map((usage) => {
+    const observation = byHash.get(usage.imageSha256);
+    if (!observation) return usage;
+    return {
+      ...usage,
+      capturedAtLocal: observation.capturedAtLocal,
+      fiveHour: {
+        ...usage.fiveHour,
+        resetsAtLocal: observation.fiveHourResetsAtLocal ?? usage.fiveHour.resetsAtLocal,
+      },
+      weekly: {
+        ...usage.weekly,
+        resetsOnLocal: observation.weeklyResetsOnLocal ?? usage.weekly.resetsOnLocal,
+      },
+      extraction: {
+        ...usage.extraction,
+        captureDateSource: 'ocr',
+        captureTimeSource: 'ocr',
+        captureObservationId: observation.id,
+      },
+    };
+  });
+}
+
+function captureObservation(verified, captureValidation) {
+  const observedAt = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    id: 'capture-time-' + sha256(Buffer.from(verified.imageSha256 + '|' + verified.capturedAtLocal + '|' + observedAt)),
+    imageSha256: verified.imageSha256,
+    sourceImage: verified.sourceImage,
+    capturedAtLocal: verified.capturedAtLocal,
+    fiveHourResetsAtLocal: verified.fiveHour.resetsAtLocal,
+    weeklyResetsOnLocal: verified.weekly.resetsOnLocal,
+    observedAt,
+    reason: 'Timestamp riletto dallo screenshot con accordo di almeno due passaggi OCR.',
+    extraction: {
+      engine: 'tesseract.js',
+      captureValidation,
+      fullOcrTextStored: false,
+    },
+  };
 }
 
 async function recordExtraCreditPurchase() {
@@ -476,43 +534,28 @@ function localDateTime(year, month, day, time) {
   return dateOnly(year, month, day) + 'T' + time;
 }
 
-function localCalendarDateTime(date) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-  const get = (type) => parts.find((part) => part.type === type)?.value;
-  return {
-    year: Number(get('year')),
-    month: Number(get('month')),
-    day: Number(get('day')),
-    hour: Number(get('hour')),
-    minute: Number(get('minute')),
-    second: Number(get('second')),
-  };
-}
-
-function parseCaptureTimestamp(text, fileStat) {
+function parseCaptureTimestamp(text) {
   const normalized = normalizeOcr(text);
   const timeMatch = normalized.match(/(\d{1,2})[:.;](\d{2})[:.;](\d{2})/);
-  const fallback = localCalendarDateTime(fileStat.mtime);
-  const hour = timeMatch ? Number(timeMatch[1]) : fallback.hour;
-  const minute = timeMatch ? Number(timeMatch[2]) : fallback.minute;
-  const second = timeMatch ? Number(timeMatch[3]) : fallback.second;
   const dateMatch = normalized.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/);
-  const day = dateMatch ? Number(dateMatch[1]) : fallback.day;
-  const month = dateMatch ? Number(dateMatch[2]) : fallback.month;
-  const year = dateMatch ? Number(dateMatch[3]) : fallback.year;
+  if (!timeMatch || !dateMatch) {
+    throw new Error('data e ora complete non riconosciute nello screenshot');
+  }
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const second = Number(timeMatch[3]);
+  const day = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const year = Number(dateMatch[3]);
 
   if (hour > 23 || minute > 59 || second > 59 || month < 1 || month > 12 || day < 1 || day > 31) {
     throw new Error('data o ora della schermata fuori intervallo');
   }
+  const calendarCheck = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (
+    calendarCheck.getUTCFullYear() !== year || calendarCheck.getUTCMonth() !== month - 1 ||
+    calendarCheck.getUTCDate() !== day
+  ) throw new Error('data della schermata non valida');
 
   const time = pad(hour) + ':' + pad(minute) + ':' + pad(second);
   return {
@@ -521,9 +564,8 @@ function parseCaptureTimestamp(text, fileStat) {
     day,
     time,
     local: localDateTime(year, month, day, time),
-    dateSource: dateMatch ? 'ocr' : 'file-mtime',
-    timeSource: timeMatch ? 'ocr' : 'file-mtime',
-    fileModifiedAt: fileStat.mtime.toISOString(),
+    dateSource: 'ocr',
+    timeSource: 'ocr',
   };
 }
 
@@ -677,6 +719,71 @@ function usagePanelRectangle(imageBuffer) {
   };
 }
 
+function timestampRectangle(imageBuffer) {
+  const dimensions = readPngDimensions(imageBuffer) ??
+    readJpegDimensions(imageBuffer) ??
+    readWebpDimensions(imageBuffer);
+  if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0) return null;
+  const left = Math.max(0, Math.round(dimensions.width * 0.72));
+  const top = Math.max(0, Math.round(dimensions.height * 0.78));
+  return { left, top, width: dimensions.width - left, height: dimensions.height - top };
+}
+
+async function recognizeCaptureTimestamp(worker, imageBuffer) {
+  const rectangle = timestampRectangle(imageBuffer);
+  if (!rectangle) throw new Error('dimensioni immagine non leggibili per il timestamp');
+  const base = sharp(imageBuffer)
+    .extract(rectangle)
+    .resize({ width: 1600, withoutEnlargement: false, fit: 'inside' })
+    .grayscale();
+  const passes = [
+    { name: 'timestamp-normalized', image: await base.clone().normalize().sharpen().png().toBuffer() },
+    { name: 'timestamp-soft', image: await base.clone().linear(1.25, 8).sharpen().png().toBuffer() },
+    { name: 'timestamp-threshold', image: await base.clone().threshold(150).png().toBuffer() },
+  ];
+  const candidates = [];
+  const failures = [];
+  await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+  for (const pass of passes) {
+    const result = await worker.recognize(pass.image);
+    try {
+      candidates.push({
+        name: pass.name,
+        capture: parseCaptureTimestamp(result.data.text),
+        confidence: Number(result.data.confidence.toFixed(2)),
+      });
+    } catch (error) {
+      failures.push({ name: pass.name, reason: error.message });
+    }
+  }
+  const groups = new Map();
+  for (const candidate of candidates) {
+    const key = candidate.capture.local;
+    groups.set(key, [...(groups.get(key) ?? []), candidate]);
+  }
+  const agreement = [...groups.values()]
+    .sort((left, right) => right.length - left.length || right[0].confidence - left[0].confidence)[0] ?? [];
+  if (agreement.length < 2) {
+    const valid = candidates.map((candidate) => candidate.name + '=' + candidate.capture.local);
+    const invalid = failures.map((failure) => failure.name + ' (' + failure.reason + ')');
+    throw new Error('tripla verifica timestamp senza accordo: ' + ([...valid, ...invalid].join(', ') || 'nessun passaggio valido'));
+  }
+  const selected = agreement.slice().sort((left, right) => right.confidence - left.confidence)[0];
+  return {
+    capture: selected.capture,
+    confidence: selected.confidence,
+    validation: {
+      requiredMatchingPasses: 2,
+      matchingPasses: agreement.map((candidate) => candidate.name),
+      validCandidates: candidates.map((candidate) => ({
+        pass: candidate.name,
+        capturedAtLocal: candidate.capture.local,
+        confidence: candidate.confidence,
+      })),
+    },
+  };
+}
+
 function usageSignature(usage) {
   return [
     usage.fiveHour.remainingPct,
@@ -753,7 +860,8 @@ async function recognizeImage(worker, imagePath, imageBuffer, imageName, imageHa
   const fileStat = await fs.stat(imagePath);
   await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
   const fullResult = await worker.recognize(imagePath);
-  const capture = parseCaptureTimestamp(fullResult.data.text, fileStat);
+  const captureResult = await recognizeCaptureTimestamp(worker, imageBuffer);
+  const capture = captureResult.capture;
   const rectangle = usagePanelRectangle(imageBuffer);
   const { candidates, failures } = await recognizeUsageCandidates(
     worker,
@@ -800,7 +908,7 @@ async function recognizeImage(worker, imagePath, imageBuffer, imageName, imageHa
       extraction: {
         engine: 'tesseract.js',
         ocrConfidence: selected.confidence,
-        captureOcrConfidence: Number(fullResult.data.confidence.toFixed(2)),
+        captureOcrConfidence: captureResult.confidence,
         usageOcrConfidence: selected.confidence,
         usageRegion: rectangle ? 'left-panel' : 'full-image',
         usageValidation: {
@@ -812,9 +920,10 @@ async function recognizeImage(worker, imagePath, imageBuffer, imageName, imageHa
             confidence: candidate.confidence,
           })),
         },
+        captureValidation: captureResult.validation,
         captureDateSource: capture.dateSource,
         captureTimeSource: capture.timeSource,
-        sourceFileModifiedAt: capture.fileModifiedAt,
+        sourceFileModifiedAt: fileStat.mtime.toISOString(),
         fullOcrTextStored: false,
       },
   };
@@ -838,8 +947,12 @@ async function createOcrWorker() {
 }
 
 async function verifyProcessedImages() {
-  const existingUsages = await readJsonLines(usageDataFile);
+  const rawUsages = await readJsonLines(usageDataFile);
+  const observations = await readJsonLines(captureTimeObservationsFile);
+  const existingUsages = applyCaptureTimeObservations(rawUsages, observations);
   const usageByHash = new Map(existingUsages.map((usage) => [usage.imageSha256, usage]));
+  const rawUsageByHash = new Map(rawUsages.map((usage) => [usage.imageSha256, usage]));
+  const observationByHash = latestCaptureObservations(observations);
   const entries = await fs.readdir(processedDir, { withFileTypes: true });
   const images = entries
     .filter((entry) => entry.isFile() && /\.(png|jpe?g|webp)$/i.test(entry.name))
@@ -847,6 +960,7 @@ async function verifyProcessedImages() {
     .sort();
   const worker = await createOcrWorker();
   let failures = 0;
+  let repairedTimestamps = 0;
 
   try {
     for (const imageName of images) {
@@ -863,6 +977,28 @@ async function verifyProcessedImages() {
             ', storico=' + usageSignature(stored),
           );
         }
+        const rawStored = rawUsageByHash.get(imageHash);
+        const timestampDiffers = verified.capturedAtLocal !== stored.capturedAtLocal;
+        const timestampWasNotReadFromScreenshot = !observationByHash.has(imageHash) && (
+          rawStored?.extraction?.captureDateSource !== 'ocr' || rawStored?.extraction?.captureTimeSource !== 'ocr'
+        );
+        if (timestampDiffers || timestampWasNotReadFromScreenshot) {
+          if (!repairCaptureTimes) {
+            throw new Error(
+              'timestamp storico non conforme: OCR=' + verified.capturedAtLocal +
+              ', storico=' + stored.capturedAtLocal +
+              '; eseguire con --repair-capture-times per registrare una rettifica append-only',
+            );
+          }
+          const observation = captureObservation(verified, verified.extraction.captureValidation);
+          if (!dryRun) await appendJsonLine(captureTimeObservationsFile, observation);
+          observationByHash.set(imageHash, observation);
+          repairedTimestamps += 1;
+          console.log(
+            '\nTimestamp rettificato: ' + imageName + ' — ' + stored.capturedAtLocal +
+            ' → ' + verified.capturedAtLocal + (dryRun ? ' (dry-run)' : ''),
+          );
+        }
         console.log('\nVerificata: ' + imageName + ' — ' + usageSignature(verified));
       } catch (error) {
         failures += 1;
@@ -873,7 +1009,12 @@ async function verifyProcessedImages() {
     await worker.terminate();
   }
 
-  console.log('\nVerifica archivio completata. Immagini: ' + images.length + '; errori: ' + failures + '.');
+  if (repairCaptureTimes && repairedTimestamps > 0 && !dryRun) await renderReports();
+
+  console.log(
+    '\nVerifica archivio completata. Immagini: ' + images.length +
+    '; timestamp rettificati: ' + repairedTimestamps + '; errori: ' + failures + '.',
+  );
   if (failures > 0) process.exitCode = 2;
 }
 
@@ -1187,18 +1328,21 @@ function renderEstimates(usages, pricingSnapshots, exchangeRateSnapshots) {
 
 async function renderReports() {
   const [
-    usages,
+    rawUsages,
     pricingSnapshots,
     exchangeRateSnapshots,
     extraCreditPurchases,
     billingCalibrations,
+    captureTimeObservations,
   ] = await Promise.all([
     readJsonLines(usageDataFile),
     readJsonLines(pricingDataFile),
     readJsonLines(exchangeRateDataFile),
     readJsonLines(extraCreditDataFile),
     readJsonLines(billingCalibrationDataFile),
+    readJsonLines(captureTimeObservationsFile),
   ]);
+  const usages = applyCaptureTimeObservations(rawUsages, captureTimeObservations);
 
   await Promise.all([
     atomicWrite(path.join(reportsDir, 'usage-history.md'), renderUsageHistory(usages)),

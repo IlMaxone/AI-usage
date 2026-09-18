@@ -38,6 +38,9 @@ export interface UsageRecord {
 export interface DashboardRecord {
   id: string; mode: 'CONSTANT' | 'SEGMENT'; status: UsageRecord['status']; createdAt: string; capturedAt: string | null;
   project: Project | null; usage: UsageResult;
+  observedUsage: {
+    fiveHourUsedPct: number; weeklyUsedPct: number; fiveHourResetsAt: string; weeklyResetsOn: string;
+  } | null;
 }
 export interface CostAnalysisItem {
   recordId: string; project: Project | null; mode: 'CONSTANT' | 'SEGMENT'; capturedAt: string;

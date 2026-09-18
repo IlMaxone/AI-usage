@@ -23,6 +23,7 @@
       <div class="brand"><span class="brand-mark">AI</span><span>The AI <em>Workbench</em></span></div>
       <nav aria-label="Navigazione principale">
         <button [class.active]="tab() === 'overview'" (click)="setTab('overview')"><span>⌂</span> La scrivania</button>
+        <button [class.active]="tab() === 'analytics'" (click)="setTab('analytics')"><span>⌁</span> Analisi usage</button>
         <button [class.active]="tab() === 'projects'" (click)="setTab('projects')"><span>▦</span> I progetti</button>
         <button [class.active]="tab() === 'insert'" (click)="setTab('insert')"><span>↥</span> Nuova lettura</button>
         <button [class.active]="tab() === 'records'" (click)="setTab('records')"><span>☷</span> Archivio usage @if (activeValidations()) { <b>{{ activeValidations() }}</b> }</button>
@@ -39,12 +40,53 @@
       @if (error()) { <p class="alert error">{{ error() }}</p> }
 
       @if (tab() === 'overview') {
+        <section class="dashboard-intro"><div><p class="eyebrow">RIEPILOGO PER PROGETTO</p><h2>Tempo e costo, senza rumore.</h2></div>@if (overviewCostAnalysis(); as analysis) { <p>Scenario: <strong>{{ analysis.model.provider }} · {{ analysis.model.name }} · {{ analysis.model.reasoning }}</strong></p> }</section>
+        @if (overviewCostLoading()) { <div class="panel empty">Calcolo minuti e costi per progetto…</div> }
+        @else if (overviewCostAnalysis(); as analysis) {
+          <section class="project-summary-grid">
+            @for (item of projectCostSummaries(); track item.project.id) {
+              <article class="project-summary-card" [style.--project-color]="item.project.color">
+                <div class="project-summary-name"><span class="project-icon" [style.background]="item.project.color">{{ item.project.name.slice(0, 1).toUpperCase() }}</span><h2>{{ item.project.name }}</h2></div>
+                <dl><div><dt>Minuti stimati</dt><dd>{{ item.estimatedMinutes === null ? '—' : (item.estimatedMinutes | number:'1.0-4') }}</dd></div><div><dt>Costo stimato</dt><dd>{{ item.estimatedCost | currency:analysis.model.pricing.currency:'symbol':'1.2-8' }}</dd></div></dl>
+              </article>
+            } @empty { <div class="panel empty">Crea un progetto per visualizzare il riepilogo.</div> }
+          </section>
+        } @else { <div class="panel empty">Censisci un modello nella pagina Modelli e conti per stimare minuti e costi.</div> }
+      }
+
+      @if (tab() === 'analytics') {
         @if (dashboard(); as data) {
           <section class="metrics">
             <article class="metric hero-metric"><span>Utilizzo attribuito</span><strong>{{ data.metrics.usedPctSum | number:'1.0-2' }}<small>%</small></strong><p>Usage costante e delta dei segmenti con finestra 5h coerente</p></article>
             <article class="metric"><span>Rilevazioni misurate</span><strong>{{ data.metrics.measuredRecords }}<small>/{{ data.metrics.records }}</small></strong><p>{{ data.metrics.segments }} segmenti inizio/fine</p></article>
             <article class="metric"><span>Crediti extra spesi</span><strong>{{ data.metrics.extraCreditsSpent | number }}</strong><p>€ {{ data.metrics.extraPaidEur | number:'1.2-2' }} dichiarati</p></article>
           </section>
+          <article class="panel usage-chart-panel">
+            <div class="panel-head"><div><p class="eyebrow">ANDAMENTO STORICO</p><h2>Consumo osservato negli screenshot</h2></div><div class="chart-legend"><span><i class="five-hour"></i>Finestra 5h</span><span><i class="weekly"></i>Settimanale</span></div></div>
+            @if (usageChartPoints().length) {
+              <div class="usage-chart-wrap">
+                <svg class="usage-chart" viewBox="0 0 990 320" role="img" aria-label="Grafico a punti dell'utilizzo nella finestra di cinque ore e settimanale">
+                  <g class="chart-grid">
+                    <line x1="58" y1="28" x2="932" y2="28"></line><text x="46" y="32">100%</text>
+                    <line x1="58" y1="87.5" x2="932" y2="87.5"></line><text x="46" y="91.5">75%</text>
+                    <line x1="58" y1="147" x2="932" y2="147"></line><text x="46" y="151">50%</text>
+                    <line x1="58" y1="206.5" x2="932" y2="206.5"></line><text x="46" y="210.5">25%</text>
+                    <line x1="58" y1="266" x2="932" y2="266"></line><text x="46" y="270">0%</text>
+                  </g>
+                  @if (usageChartPoints().length > 1) {
+                    <polyline class="chart-line five-hour" [attr.points]="fiveHourChartLine()"></polyline>
+                    <polyline class="chart-line weekly" [attr.points]="weeklyChartLine()"></polyline>
+                  }
+                  @for (point of usageChartPoints(); track point.id) {
+                    <line class="chart-tick" [attr.x1]="point.x" y1="266" [attr.x2]="point.x" y2="272"></line>
+                    <text class="chart-date" [attr.x]="point.x" y="292">{{ point.shortLabel }}</text>
+                    <circle class="chart-point five-hour" [attr.cx]="point.x" [attr.cy]="point.fiveHourY" r="6"><title>{{ point.fullLabel }} · 5h {{ point.fiveHourUsedPct | number:'1.0-2' }}%</title></circle>
+                    <circle class="chart-point weekly" [attr.cx]="point.x" [attr.cy]="point.weeklyY" r="6"><title>{{ point.fullLabel }} · settimana {{ point.weeklyUsedPct | number:'1.0-2' }}%</title></circle>
+                  }
+                </svg>
+              </div>
+            } @else { <div class="empty">Il grafico apparirà dopo la prima lettura OCR validata.</div> }
+          </article>
           <section class="split-grid">
             <article class="panel span-two"><div class="panel-head"><div><p class="eyebrow">ULTIME RILEVAZIONI</p><h2>I dati parlano da soli</h2></div><button class="text-button" (click)="setTab('insert')">Nuovo inserimento →</button></div>
               <div class="table-wrap"><table><thead><tr><th>Data</th><th>Progetto</th><th>Tipo</th><th>Usage 5h</th></tr></thead><tbody>
@@ -63,12 +105,12 @@
 
       @if (tab() === 'projects') {
         <section class="content-grid project-management">
-          <article class="panel form-panel"><p class="eyebrow">NUOVO PROGETTO</p><h2>Crea un contenitore</h2><p class="muted">Ogni rilevazione verrà attribuita a un progetto. Nome e colore possono essere modificati in seguito.</p><form class="stack-form" [formGroup]="projectForm" (ngSubmit)="createProject()"><label>Nome<input formControlName="name" placeholder="Sito cliente, app interna…"></label><label>Colore<input class="color-wide" type="color" formControlName="color"></label><button class="primary" type="submit" [disabled]="projectForm.invalid">Aggiungi progetto</button></form></article>
+          <article class="panel form-panel"><p class="eyebrow">NUOVO PROGETTO</p><h2>Crea un contenitore</h2><p class="muted">Ogni rilevazione verrà attribuita a un progetto. Nome e colore possono essere modificati in seguito.</p><form class="stack-form" [formGroup]="projectForm" (ngSubmit)="createProject()"><label>Nome<input formControlName="name" placeholder="Sito cliente, app interna…"></label><fieldset class="color-field"><legend>Colore</legend><div class="color-palette" role="listbox" aria-label="Colore del progetto">@for (color of projectColors; track color) { <button class="color-swatch" type="button" role="option" [class.selected]="projectForm.controls.color.value === color" [style.background]="color" [attr.aria-label]="'Scegli ' + color" [attr.aria-selected]="projectForm.controls.color.value === color" (click)="chooseProjectColor(color)"><span>✓</span></button> }</div></fieldset><button class="primary" type="submit" [disabled]="projectForm.invalid">Aggiungi progetto</button></form></article>
           <article class="panel event-list-panel"><div class="panel-head"><div><p class="eyebrow">TUTTI I PROGETTI</p><h2>{{ projects().length }} progetti</h2></div></div><div class="project-admin-list">
             @for (project of projects(); track project.id) {
               <article class="project-admin-row">
                 @if (editingProjectId() === project.id) {
-                  <form class="edit-project-form" [formGroup]="editProjectForm" (ngSubmit)="saveProject(project.id)"><input type="color" formControlName="color"><input formControlName="name"><button class="primary" type="submit">Salva</button><button class="secondary" type="button" (click)="editingProjectId.set(null)">Annulla</button></form>
+                  <form class="edit-project-form" [formGroup]="editProjectForm" (ngSubmit)="saveProject(project.id)"><input formControlName="name" aria-label="Nome progetto"><div class="color-palette compact" role="listbox" aria-label="Colore del progetto">@for (color of projectColors; track color) { <button class="color-swatch" type="button" role="option" [class.selected]="editProjectForm.controls.color.value === color" [style.background]="color" [attr.aria-label]="'Scegli ' + color" [attr.aria-selected]="editProjectForm.controls.color.value === color" (click)="chooseProjectColor(color, true)"><span>✓</span></button> }</div><div class="edit-project-actions"><button class="primary" type="submit">Salva</button><button class="secondary" type="button" (click)="editingProjectId.set(null)">Annulla</button></div></form>
                 } @else {
                   <span class="project-icon" [style.background]="project.color">{{ project.name.slice(0, 1).toUpperCase() }}</span><div><h3>{{ project.name }}</h3><p>Disponibile per nuovi inserimenti</p></div><div class="row-actions"><button class="secondary" (click)="editProject(project)">Modifica</button><button class="danger" (click)="deleteProject(project.id)">Elimina</button></div>
                 }
@@ -80,29 +122,34 @@
 
       @if (tab() === 'insert') {
         <section class="content-grid insert-grid">
-          <article class="panel form-panel"><p class="eyebrow">INSERIMENTO GUIDATO</p><h2>Screenshot di usage</h2><p class="muted">Scegli un solo screenshot per fotografare l’usage corrente, oppure due screenshot per misurare il lavoro svolto tra inizio e fine nella stessa finestra di 5 ore.</p>
+          <article class="panel form-panel"><p class="eyebrow">INSERIMENTO GUIDATO</p><h2>Screenshot di usage</h2><p class="muted">Puoi caricare fino a 30 rilevazioni alla volta. Nel batch singolo ogni immagine crea un record; nel segmento gli screenshot iniziali e finali vengono abbinati nello stesso ordine.</p>
             @if (!projects().length) { <p class="alert error">Prima crea almeno un progetto dalla pagina Gestione progetti.</p> }
             <form class="stack-form" [formGroup]="recordForm" (ngSubmit)="startValidation()">
               <label>Progetto<select formControlName="projectId">@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
-              <label>Tipo di inserimento<select formControlName="mode"><option value="CONSTANT">Usage costante · 1 screenshot</option><option value="SEGMENT">Segmento di usage · 2 screenshot</option></select></label>
+              <label>Tipo di inserimento<select formControlName="mode"><option value="CONSTANT">Batch singolo · ogni immagine è una rilevazione</option><option value="SEGMENT">Batch segmento · coppie inizio/fine</option></select></label>
               @if (recordForm.controls.mode.value === 'CONSTANT') {
-                <label class="dropzone" [class.selected]="selectedFiles().single"><input type="file" accept="image/png,image/jpeg,image/webp" (change)="chooseFile('single', $event)"><span>{{ selectedFiles().single ? '✓' : '↥' }}</span><strong>{{ selectedFiles().single?.name || 'Screenshot usage' }}</strong><small>{{ selectedFiles().single ? selectedFiles().single?.size + ' · pronto per il caricamento' : 'Una fotografia dei valori nella finestra 5h' }}</small></label>
+                <label class="dropzone" [class.selected]="selectedFiles().single"><input type="file" multiple accept="image/png,image/jpeg,image/webp" (change)="chooseFile('single', $event)"><span>{{ selectedFiles().single ? '✓' : '↥' }}</span><strong>{{ selectedFiles().single?.name || 'Screenshot usage · fino a 30 file' }}</strong><small>{{ selectedFiles().single ? selectedFiles().single?.size + ' · ' + selectedFiles().single?.count + ' batch separati' : 'Ogni immagine diventa una rilevazione autonoma' }}</small></label>
               } @else {
-                <div class="field-row"><label class="dropzone" [class.selected]="selectedFiles().start"><input type="file" accept="image/png,image/jpeg,image/webp" (change)="chooseFile('start', $event)"><span>{{ selectedFiles().start ? '✓' : '①' }}</span><strong>{{ selectedFiles().start?.name || 'Screenshot iniziale' }}</strong><small>{{ selectedFiles().start ? selectedFiles().start?.size + ' · pronto' : 'Prima di iniziare il progetto' }}</small></label><label class="dropzone" [class.selected]="selectedFiles().end"><input type="file" accept="image/png,image/jpeg,image/webp" (change)="chooseFile('end', $event)"><span>{{ selectedFiles().end ? '✓' : '②' }}</span><strong>{{ selectedFiles().end?.name || 'Screenshot finale' }}</strong><small>{{ selectedFiles().end ? selectedFiles().end?.size + ' · pronto' : 'Alla conclusione, nella stessa finestra 5h' }}</small></label></div>
+                <div class="field-row"><label class="dropzone" [class.selected]="selectedFiles().start"><input type="file" multiple accept="image/png,image/jpeg,image/webp" (change)="chooseFile('start', $event)"><span>{{ selectedFiles().start ? '✓' : '①' }}</span><strong>{{ selectedFiles().start?.name || 'Screenshot iniziali · fino a 30' }}</strong><small>{{ selectedFiles().start ? selectedFiles().start?.size + ' · posizioni 1–' + selectedFiles().start?.count : 'Selezionali già nell’ordine di abbinamento' }}</small></label><label class="dropzone" [class.selected]="selectedFiles().end"><input type="file" multiple accept="image/png,image/jpeg,image/webp" (change)="chooseFile('end', $event)"><span>{{ selectedFiles().end ? '✓' : '②' }}</span><strong>{{ selectedFiles().end?.name || 'Screenshot finali · stesso numero' }}</strong><small>{{ selectedFiles().end ? selectedFiles().end?.size + ' · posizioni 1–' + selectedFiles().end?.count : 'La posizione deve corrispondere all’inizio' }}</small></label></div>
+                @if (selectedFiles().start && selectedFiles().end && selectedFiles().start?.count !== selectedFiles().end?.count) { <p class="batch-warning">Le liste non coincidono: {{ selectedFiles().start?.count }} inizi e {{ selectedFiles().end?.count }} fini.</p> }
               }
               <label>Nota facoltativa<textarea formControlName="note" rows="2" placeholder="Solo contesto sintetico, senza dati personali"></textarea></label>
               @if (uploadFeedback()) { <p class="upload-feedback"><span>✓</span>{{ uploadFeedback() }}</p> }
-              <button class="primary validate-button" type="submit" [disabled]="loading() || recordForm.invalid || !projects().length"><span>✓</span><strong>Avvia convalida</strong><small>3 letture OCR · almeno 2 devono concordare</small></button>
+              <button class="primary validate-button" type="submit" [disabled]="loading() || recordForm.invalid || !projects().length || !batchReady()"><span>✓</span><strong>Avvia {{ plannedBatchCount() > 1 ? plannedBatchCount() + ' convalide' : 'convalida' }}</strong><small>Ogni batch avrà 3 letture OCR indipendenti · almeno 2 devono concordare</small></button>
             </form>
           </article>
-          <article class="panel explainer"><p class="eyebrow">COME FUNZIONA</p><h2>Due modalità, nessun evento</h2><div class="explain-step"><b>01</b><div><strong>Usage costante</strong><p>Salva direttamente la percentuale usata mostrata da un singolo screenshot.</p></div></div><div class="explain-step"><b>02</b><div><strong>Segmento di usage</strong><p>Calcola il delta tra screenshot finale e iniziale, soltanto se il reset 5h coincide.</p></div></div><div class="explain-step"><b>03</b><div><strong>Tripla verifica OCR</strong><p>Tre letture mirate devono concordare sia sui valori sia sulla data e ora visibili nello screenshot.</p></div></div><div class="explain-step"><b>04</b><div><strong>Correzione tracciata</strong><p>Puoi rettificare i valori dalla pagina Rilevazioni senza cancellare l’OCR originale.</p></div></div></article>
+          <article class="panel explainer"><p class="eyebrow">COME FUNZIONA</p><h2>Batch ordinati, nessun evento</h2><div class="explain-step"><b>01</b><div><strong>Batch singolo</strong><p>30 immagini producono 30 rilevazioni usage costante indipendenti.</p></div></div><div class="explain-step"><b>02</b><div><strong>Batch segmento</strong><p>Inizio 1 viene abbinato a fine 1, inizio 2 a fine 2 e così via; le liste devono avere la stessa lunghezza.</p></div></div><div class="explain-step"><b>03</b><div><strong>Tripla verifica OCR</strong><p>Ogni rilevazione entra separatamente in coda e riceve tre letture mirate.</p></div></div><div class="explain-step"><b>04</b><div><strong>Correzione tracciata</strong><p>Puoi rettificare i valori dalla pagina Rilevazioni senza cancellare l’OCR originale.</p></div></div></article>
         </section>
       }
 
       @if (tab() === 'records') {
+        <section class="analysis-toolbar archive-toolbar panel">
+          <div><p class="eyebrow">ARCHIVIO PER PROGETTO</p><h2>{{ visibleRecords().length }} rilevazioni</h2><p>Un progetto alla volta, per mantenere leggibili segmenti, correzioni e controlli OCR.</p></div>
+          <label>Progetto<select [value]="recordsProjectId()" (change)="selectRecordsProject($any($event.target).value)">@for (project of recordProjects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
+        </section>
         <section class="records-layout">
           <div class="record-list">
-            @for (record of records(); track record.id) {
+            @for (record of visibleRecords(); track record.id) {
               <article class="panel record-card"><div class="record-head"><div><span class="project-dot large" [style.background]="record.project?.color"></span><p class="eyebrow">{{ record.project?.name || 'PROGETTO ELIMINATO' }}</p><h2>{{ record.mode === 'CONSTANT' ? 'Usage costante' : 'Segmento di usage' }}</h2><small>{{ recordCapturedAt(record) | date:'dd MMM yyyy, HH:mm:ss' }}</small></div><div class="record-result"><span class="status" [class.warn]="record.status === 'MANUAL_REVIEW' || record.status === 'FAILED'">{{ statusLabel(record.status) }}</span><strong>{{ record.usage.usedPct === null ? '—' : (record.usage.usedPct | number:'1.0-2') + '%' }}</strong></div></div>
                 @if (record.usage.alignment; as alignment) { <p class="alignment-note" [class.warn]="alignment.fiveHourResetOffsetMinutes > 60"><strong>Controllo finestra:</strong> scarto reset 5h {{ alignment.fiveHourResetOffsetMinutes | number:'1.0-2' }} min · {{ weeklySignalLabel(alignment.weeklyResetSignal) }}</p> }
                 <div class="reading-grid" [class.two]="record.mode === 'SEGMENT'">
@@ -111,7 +158,7 @@
                   } }
                 </div>
                 @if (record.note) { <p class="record-note">{{ record.note }}</p> }
-                <div class="record-actions">@if (record.status === 'MANUAL_REVIEW' || record.status === 'FAILED' || record.status === 'DRAFT') { <button class="secondary" (click)="retryValidation(record.id)">Ripeti tripla verifica</button> }<button class="danger-link" (click)="deleteRecord(record.id)">Elimina rilevazione</button></div>
+                <div class="record-actions">@if (record.mode === 'SEGMENT') { <button class="secondary" (click)="openRecordImages(record)">Dettagli screenshot</button> } @if (record.status === 'MANUAL_REVIEW' || record.status === 'FAILED' || record.status === 'DRAFT') { <button class="secondary" (click)="retryValidation(record.id)">Ripeti tripla verifica</button> }<button class="danger-link" (click)="deleteRecord(record.id)">Elimina rilevazione</button></div>
               </article>
             } @empty { <div class="panel empty">Nessuna rilevazione disponibile.</div> }
           </div>
@@ -123,16 +170,23 @@
 
       @if (tab() === 'analysis') {
         <section class="analysis-toolbar panel">
-          <div><p class="eyebrow">CARTELLA SCREENSHOT</p><h2>{{ visibleAnalysisImages().length }} immagini disponibili</h2><p>File letti dalla cartella locale documentata e mostrati soltanto al proprietario autenticato.</p></div>
-          <label>Progetto da analizzare<select [value]="analysisProjectId()" (change)="selectAnalysisProject($any($event.target).value)">@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
+          <div><p class="eyebrow">CARTELLA SCREENSHOT</p><h2>{{ analysisImageGroups().length }} rilevazioni · {{ visibleAnalysisImages().length }} immagini</h2><p>Ogni blocco riunisce gli screenshot appartenenti allo stesso usage costante o segmento inizio/fine.</p></div>
+          <label>Progetto da analizzare<select [value]="analysisProjectId()" (change)="selectAnalysisProject($any($event.target).value)">@for (project of recordProjects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
         </section>
         @if (analysisLoading()) { <div class="panel empty">Preparo le anteprime dalla cartella locale…</div> }
         @else {
-          <section class="analysis-grid">
-            @for (item of visibleAnalysisImages(); track item.id) {
-              <article class="analysis-card" (click)="selectedAnalysisImage.set(item)" tabindex="0" (keydown.enter)="selectedAnalysisImage.set(item)">
-                <div class="analysis-preview"><img [src]="item.url" [alt]="'Screenshot ' + roleLabel(item.role)" loading="lazy"><span class="status" [class.warn]="item.status === 'MANUAL_REVIEW' || item.status === 'FAILED'">{{ uploadStatus(item.status) }}</span></div>
-                <div class="analysis-copy"><span class="project-dot" [style.background]="item.project?.color"></span><div><strong>{{ item.project?.name || 'Progetto eliminato' }}</strong><small>{{ roleLabel(item.role) }} · {{ (item.capturedAt || item.createdAt) | date:'dd MMM yyyy, HH:mm:ss' }}</small><small>{{ item.originalName }} · {{ item.size / 1048576 | number:'1.2-2' }} MB</small></div></div>
+          <section class="analysis-groups">
+            @for (group of analysisImageGroups(); track group.key) {
+              <article class="panel analysis-segment" [class.focused]="group.recordId === selectedAnalysisRecordId()" [attr.id]="group.recordId ? 'analysis-record-' + group.recordId : null">
+                <header class="analysis-segment-head"><div><p class="eyebrow">{{ group.mode === 'SEGMENT' ? 'SEGMENTO DI USAGE' : 'USAGE COSTANTE' }}</p><h2>{{ group.mode === 'SEGMENT' ? 'Inizio e fine della rilevazione' : 'Screenshot della rilevazione' }}</h2></div><div class="segment-meta"><strong>{{ group.capturedAt | date:'dd MMM yyyy, HH:mm:ss' }}</strong><small>{{ group.images.length }} {{ group.images.length === 1 ? 'screenshot' : 'screenshot abbinati' }}</small></div></header>
+                <div class="analysis-segment-grid" [class.segment]="group.mode === 'SEGMENT'">
+                  @for (item of group.images; track item.id) {
+                    <article class="analysis-card" (click)="selectedAnalysisImage.set(item)" tabindex="0" (keydown.enter)="selectedAnalysisImage.set(item)">
+                      <div class="analysis-preview"><img [src]="item.url" [alt]="'Screenshot ' + roleLabel(item.role)" loading="lazy"><span class="status" [class.warn]="item.status === 'MANUAL_REVIEW' || item.status === 'FAILED'">{{ uploadStatus(item.status) }}</span></div>
+                      <div class="analysis-copy"><span class="project-dot" [style.background]="item.project?.color"></span><div><strong>{{ roleLabel(item.role) }}</strong><small>{{ item.project?.name || 'Progetto eliminato' }} · {{ (item.capturedAt || item.createdAt) | date:'dd MMM yyyy, HH:mm:ss' }}</small><small>{{ item.originalName }} · {{ item.size / 1048576 | number:'1.2-2' }} MB</small></div></div>
+                    </article>
+                  }
+                </div>
               </article>
             } @empty { <div class="panel empty">Nessuno screenshot presente per questo progetto.</div> }
           </section>

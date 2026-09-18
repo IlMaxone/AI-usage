@@ -72,6 +72,7 @@ export class DashboardController {
         ? captureTimeByUpload.get(captureUploadId)?.capturedAt ?? snapshotByUpload.get(captureUploadId)?.capturedAt
         : undefined;
       const usage = computeRecordUsage(record.mode, single, start, end);
+      const observed = record.mode === 'SEGMENT' ? end : single;
       return {
         id: record.id,
         mode: record.mode,
@@ -86,6 +87,12 @@ export class DashboardController {
           .filter(Boolean)
           .map((upload) => ({ id: upload!.id, role: upload!.role, status: upload!.status })),
         usage,
+        observedUsage: observed ? {
+          fiveHourUsedPct: Number(observed.fiveHourUsedPct),
+          weeklyUsedPct: Number(observed.weeklyUsedPct),
+          fiveHourResetsAt: observed.fiveHourResetsAt,
+          weeklyResetsOn: observed.weeklyResetsOn,
+        } : null,
       };
     });
 

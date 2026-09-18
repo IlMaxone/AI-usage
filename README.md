@@ -134,6 +134,7 @@ Modalità disponibili:
 .\run-analysis.ps1 GFP -Offline
 .\run-analysis.ps1 GFP -VerifyProcessed
 npm run verify:processed -- GFP
+npm run verify:processed:repair-times -- GFP
 npm run credits:add -- GFP 500 20
 npm run demo:build
 ```
@@ -143,9 +144,12 @@ Windows interpreti opzioni personalizzate come configurazioni proprie.
 
 - `DryRun` legge e valida senza scrivere o spostare file.
 - `Offline` riutilizza l'ultimo snapshot Internet disponibile.
-- `VerifyProcessed` riesegue il doppio controllo OCR sulle immagini archiviate
-  e confronta i risultati con lo storico, senza scaricare fonti o modificare i
-  dati.
+- `VerifyProcessed` riesegue la tripla verifica OCR sulle immagini archiviate
+  e confronta valori usage, reset e timestamp con lo storico, senza scaricare
+  fonti o modificare i dati.
+- `verify:processed:repair-times` registra le rettifiche temporali validate in
+  `historical-data/capture-time-observations.jsonl`. Il registro e append-only:
+  lo snapshot OCR originale non viene modificato.
 - `credits:add` registra un acquisto di crediti extra dichiarato dall'utente e
   rigenera i report senza avviare l'OCR né accedere a Internet.
 - `demo:build` rigenera i report dimostrativi con dati inventati.
@@ -174,6 +178,13 @@ Percentuali e reset vengono cercati nel pannello originale, in una versione
 ingrandita e normalizzata e, quando necessario, nell'immagine completa. Almeno
 due passaggi devono produrre la stessa firma prima che la rilevazione venga
 accettata.
+
+Data e ora vengono lette separatamente dall'angolo in basso a destra dello
+screenshot con tre passaggi OCR; almeno due devono concordare sul timestamp
+completo, secondi inclusi. L'ora di modifica del file e l'ora di esecuzione OCR
+restano soltanto informazioni tecniche e non sostituiscono mai il valore visibile
+nello screenshot. La stessa regola vale sia per le nuove rilevazioni sia per la
+verifica dell'archivio `processed-images/`.
 
 Se i controlli non concordano:
 
