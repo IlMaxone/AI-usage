@@ -45,7 +45,9 @@ export class ApiService {
   uploadImage(uploadId: string) { return this.http.get(`${API_URL}/records/uploads/${uploadId}/content`, { responseType: 'blob' }); }
   createRecord(body: FormData) { return this.http.post<UsageRecord>(`${API_URL}/records`, body); }
   createRecordBatch(body: FormData) { return this.http.post<UsageRecord[]>(`${API_URL}/records/batch`, body); }
-  validateRecord(id: string) { return this.http.post(`${API_URL}/records/${id}/validate`, {}); }
+  validateRecord(id: string) {
+    return this.http.post<{ id: string; status: 'VALIDATING'; queuedUploads: number }>(`${API_URL}/records/${id}/validate`, {});
+  }
   correctReading(recordId: string, uploadId: string, payload: object) {
     return this.http.patch(`${API_URL}/records/${recordId}/snapshots/${uploadId}`, payload);
   }

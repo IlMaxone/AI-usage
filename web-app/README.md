@@ -53,8 +53,11 @@ predefinito `GPT-5.6 Sol` e reasoning `high`.
    o mostrare una data inattesa. Oltre un'ora di scarto sul reset 5h il segmento
    richiede verifica manuale.
 6. I valori possono essere corretti dalla UI. La correzione è append-only e
-   non sovrascrive lo snapshot OCR originale. La rilevazione può essere rimossa
-   dalla vista mantenendo audit e dati tecnici tracciabili.
+   non sovrascrive lo snapshot OCR originale. Il comando **Elimina rilevazione**
+   esegue invece una cancellazione definitiva esplicita: rimuove gli screenshot
+   dal disco, record, snapshot, correzioni, osservazioni temporali e audit legati
+   alla rilevazione, liberando anche l'hash SHA-256. La stessa immagine può quindi
+   essere caricata di nuovo nel progetto corretto.
 7. Data e ora della rilevazione non dipendono dall'esecuzione OCR: per l'usage
    costante provengono dallo screenshot singolo; per un segmento provengono dallo
    screenshot finale. Eventuali rettifiche temporali storiche sono osservazioni
@@ -118,12 +121,15 @@ upload.
 
 ## Integrità e privacy
 
-- progetti e rilevazioni sono cancellati logicamente e restano nell'audit;
+- i progetti sono cancellati logicamente; una rilevazione viene eliminata
+  definitivamente solo dopo la conferma esplicita mostrata dalla UI;
 - i profili economici dei modelli sono separati dai record OCR; una revisione
   crea una nuova versione senza alterare percentuali e screenshot storici;
 - osservazioni di fatturazione e acquisti extra sono append-only; i valori
   calibrati vengono derivati dal motore e non salvati come importi osservati;
-- l'audit applicativo è append-only anche a livello SQL;
+- l'audit applicativo è append-only anche a livello SQL, tranne la transazione
+  circoscritta di cancellazione definitiva richiesta dall'utente per una singola
+  rilevazione;
 - i file non hanno URL pubblici; API e metadati sono filtrati per proprietario;
 - password hashate con bcrypt e token JWT brevi; nessun token è salvato nel DB;
 - non viene persistito il testo OCR completo né alcun dato personale ricavato

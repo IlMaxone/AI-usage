@@ -25,7 +25,6 @@ import { createReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { DataSource, In, Repository } from 'typeorm';
-import { AuditService } from './audit.service';
 import { AuthUser, CurrentUser } from './common';
 import {
   AuditEventEntity,
@@ -126,7 +125,6 @@ export class RecordsController {
     @InjectRepository(UsageCorrectionEntity) private readonly corrections: Repository<UsageCorrectionEntity>,
     @InjectRepository(CaptureTimeObservationEntity) private readonly captureTimes: Repository<CaptureTimeObservationEntity>,
     private readonly dataSource: DataSource,
-    private readonly audit: AuditService,
   ) {}
 
   @Get()
@@ -396,9 +394,58 @@ export class RecordsController {
   @Delete(':id')
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     await this.owned(id, user.id);
-    await this.records.softDelete({ id, ownerId: user.id });
-    await this.audit.record(user.id, 'USAGE_RECORD_DELETED', 'usage_record', id, { softDeleted: true });
-    return { deleted: true };
+    const storageKeys = await this.dataSource.transaction(async (manager) => {
+      const uploads = await manager.query(`
+        SELECT id, storage_key AS "storageKey", status
+        FROM uploads
+        WHERE record_id = $1 AND owner_id = $2
+        FOR UPDATE
+      `, [id, user.id]) as Array<{ id: string; storageKey: string; status: string }>;
+      if (uploads.some((upload) => upload.status === 'PROCESSING')) {
+        throw new BadRequestException('Attendi la fine dell’OCR prima di eliminare la rilevazione');
+      }
+
+      const uploadIds = uploads.map((upload) => upload.id);
+      const relatedIds = [id, ...uploadIds];
+      if (uploadIds.length) {
+        const [snapshots, corrections, captureTimes] = await Promise.all([
+          manager.query('SELECT id FROM usage_snapshots WHERE upload_id = ANY($1::uuid[])', [uploadIds]) as Promise<Array<{ id: string }>>,
+          manager.query('SELECT id FROM usage_corrections WHERE upload_id = ANY($1::uuid[])', [uploadIds]) as Promise<Array<{ id: string }>>,
+          manager.query('SELECT id FROM capture_time_observations WHERE upload_id = ANY($1::uuid[])', [uploadIds]) as Promise<Array<{ id: string }>>,
+        ]);
+        relatedIds.push(...snapshots.map((item) => item.id), ...corrections.map((item) => item.id), ...captureTimes.map((item) => item.id));
+      }
+
+      await manager.query("SELECT set_config('app.allow_usage_purge', 'on', true)");
+      await manager.query('DELETE FROM audit_events WHERE owner_id = $1 AND entity_id = ANY($2::uuid[])', [user.id, relatedIds]);
+      await manager.query(`
+        UPDATE usage_records
+        SET single_upload_id = NULL, start_upload_id = NULL, end_upload_id = NULL
+        WHERE id = $1 AND owner_id = $2
+      `, [id, user.id]);
+      if (uploadIds.length) {
+        await manager.query('UPDATE usage_events SET start_upload_id = NULL WHERE start_upload_id = ANY($1::uuid[])', [uploadIds]);
+        await manager.query('UPDATE usage_events SET end_upload_id = NULL WHERE end_upload_id = ANY($1::uuid[])', [uploadIds]);
+        await manager.query('DELETE FROM capture_time_observations WHERE upload_id = ANY($1::uuid[])', [uploadIds]);
+        await manager.query('DELETE FROM usage_corrections WHERE upload_id = ANY($1::uuid[])', [uploadIds]);
+        await manager.query('DELETE FROM usage_snapshots WHERE upload_id = ANY($1::uuid[])', [uploadIds]);
+        await manager.query('DELETE FROM uploads WHERE id = ANY($1::uuid[]) AND owner_id = $2', [uploadIds, user.id]);
+      }
+      const deletion = await manager.query('DELETE FROM usage_records WHERE id = $1 AND owner_id = $2 RETURNING id', [id, user.id]) as Array<{ id: string }>;
+      if (!deletion.length) throw new NotFoundException('Rilevazione non trovata');
+      return uploads.map((upload) => upload.storageKey);
+    });
+
+    const folders = new Set<string>();
+    await Promise.all(storageKeys.map(async (storageKey) => {
+      const filePath = storedFilePath(storageKey);
+      folders.add(path.dirname(filePath));
+      await fs.unlink(filePath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    }));
+    await Promise.all([...folders].map((folder) => fs.rmdir(folder).catch(() => undefined)));
+    return { deleted: true, purgedUploads: storageKeys.length };
   }
 
   private async enrich(records: UsageRecordEntity[], ownerId: string) {

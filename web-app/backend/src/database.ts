@@ -6,6 +6,7 @@ import { UsageRecords1726500000001 } from './migrations/1726500000001-usage-reco
 import { CaptureTimeObservations1726500000002 } from './migrations/1726500000002-capture-time-observations';
 import { DetachedModelCosting1726500000003 } from './migrations/1726500000003-detached-model-costing';
 import { WindowTolerance1726500000004 } from './migrations/1726500000004-window-tolerance';
+import { UsageRecordPurge1726500000005 } from './migrations/1726500000005-usage-record-purge';
 
 export function databaseOptions(migrationsRun = false) {
   const url = process.env.DATABASE_URL;
@@ -20,6 +21,7 @@ export function databaseOptions(migrationsRun = false) {
       CaptureTimeObservations1726500000002,
       DetachedModelCosting1726500000003,
       WindowTolerance1726500000004,
+      UsageRecordPurge1726500000005,
     ],
     migrationsRun,
     synchronize: false,

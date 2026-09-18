@@ -158,7 +158,7 @@
                   } }
                 </div>
                 @if (record.note) { <p class="record-note">{{ record.note }}</p> }
-                <div class="record-actions">@if (record.mode === 'SEGMENT') { <button class="secondary" (click)="openRecordImages(record)">Dettagli screenshot</button> } @if (record.status === 'MANUAL_REVIEW' || record.status === 'FAILED' || record.status === 'DRAFT') { <button class="secondary" (click)="retryValidation(record.id)">Ripeti tripla verifica</button> }<button class="danger-link" (click)="deleteRecord(record.id)">Elimina rilevazione</button></div>
+                <div class="record-actions">@if (record.mode === 'SEGMENT') { <button class="secondary" (click)="openRecordImages(record)">Dettagli screenshot</button> } @if (record.status === 'MANUAL_REVIEW' || record.status === 'FAILED' || record.status === 'DRAFT') { <button class="secondary" [disabled]="retryingRecordIds().has(record.id)" (click)="retryValidation(record.id)">{{ retryingRecordIds().has(record.id) ? 'Riaccodamento…' : 'Ripeti tripla verifica' }}</button> } @if (record.status === 'VALIDATING') { <button class="secondary" disabled>OCR in corso…</button> }<button class="danger-link" (click)="deleteRecord(record.id)">Elimina rilevazione</button></div>
               </article>
             } @empty { <div class="panel empty">Nessuna rilevazione disponibile.</div> }
           </div>

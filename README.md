@@ -297,5 +297,7 @@ browser e rilevazioni con uno screenshot o con coppia inizio/fine. I profili
 economici dei modelli sono separati dall'OCR e possono essere applicati a
 posteriori allo stesso storico. Il consumo massimo della finestra 5h e il costo
 al minuto determinano il minutaggio disponibile, il costo attribuito e i
-relativi limiti. Le istruzioni di avvio e il modello dati sono documentati nel
-README dedicato.
+relativi limiti. Nell'archivio web, l'eliminazione confermata di una rilevazione
+rimuove anche file, hash e dati OCR collegati, permettendo di ricaricare lo
+screenshot nel progetto corretto. Le istruzioni di avvio e il modello dati sono
+documentati nel README dedicato.

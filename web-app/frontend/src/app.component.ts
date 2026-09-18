@@ -96,6 +96,7 @@ export class AppComponent implements OnDestroy {
     });
   });
   readonly activeValidations = computed(() => this.records().filter((item) => item.status === 'VALIDATING').length);
+  readonly retryingRecordIds = signal<ReadonlySet<string>>(new Set());
   readonly projectColors = [
     '#9BE15D', '#D96D4B', '#F3D5A3', '#E7A84B', '#F2C94C',
     '#88B04B', '#4F8A6D', '#4FA3A5', '#5B8DEF', '#6C7AE0',
@@ -335,11 +336,27 @@ export class AppComponent implements OnDestroy {
     for (const input of Object.values(this.fileInputs)) if (input) input.value = '';
   }
   retryValidation(id: string) {
-    this.api.validateRecord(id).subscribe({ next: () => { this.succeed('Tripla verifica OCR riavviata.'); this.refresh(true); }, error: (error) => this.fail(error) });
+    if (this.retryingRecordIds().has(id)) return;
+    this.retryingRecordIds.update((current) => new Set([...current, id]));
+    this.succeed('Riaccodamento della tripla verifica OCR…');
+    this.api.validateRecord(id).subscribe({
+      next: (result) => {
+        this.retryingRecordIds.update((current) => new Set([...current].filter((item) => item !== id)));
+        this.succeed(`${result.queuedUploads} ${result.queuedUploads === 1 ? 'screenshot riaccodato' : 'screenshot riaccodati'}: OCR in corso.`);
+        this.refresh(true);
+      },
+      error: (error) => {
+        this.retryingRecordIds.update((current) => new Set([...current].filter((item) => item !== id)));
+        this.fail(error);
+      },
+    });
   }
   deleteRecord(id: string) {
-    if (!window.confirm('Eliminare questa rilevazione dalla vista? OCR e audit resteranno tracciati.')) return;
-    this.api.deleteRecord(id).subscribe({ next: () => { this.succeed('Rilevazione eliminata dalla vista.'); this.refresh(true); }, error: (error) => this.fail(error) });
+    if (!window.confirm('Eliminare definitivamente questa rilevazione, gli screenshot e tutti i dati OCR collegati? L’operazione non è reversibile.')) return;
+    this.api.deleteRecord(id).subscribe({
+      next: () => { this.succeed('Rilevazione e screenshot eliminati definitivamente. Ora puoi ricaricarli in un altro progetto.'); this.refresh(true); },
+      error: (error) => this.fail(error),
+    });
   }
   openCorrection(recordId: string, reading: Reading, label: string) {
     if (!reading.upload) return;

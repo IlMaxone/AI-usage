@@ -111,6 +111,31 @@ async function candidate(worker: Worker, pass: string, input: string | Buffer, c
   }
 }
 
+async function rectangleCandidate(
+  worker: Worker,
+  pass: string,
+  filePath: string,
+  rectangle: { left: number; top: number; width: number; height: number },
+  capturedAt: Date,
+): Promise<Candidate | null> {
+  try {
+    const result = await worker.recognize(filePath, { rectangle });
+    return {
+      pass,
+      usage: parseUsage(result.data.text, capturedAt),
+      confidence: Number(result.data.confidence.toFixed(2)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function hasUsageAgreement(candidates: Candidate[]): boolean {
+  const counts = new Map<string, number>();
+  for (const item of candidates) counts.set(signature(item.usage), (counts.get(signature(item.usage)) ?? 0) + 1);
+  return [...counts.values()].some((count) => count >= 2);
+}
+
 async function timestampCandidate(worker: Worker, pass: string, input: Buffer): Promise<TimestampCandidate | null> {
   try {
     const result = await worker.recognize(input);
@@ -124,29 +149,35 @@ async function timestampCandidate(worker: Worker, pass: string, input: Buffer): 
   }
 }
 
-async function recognize(worker: Worker, filePath: string) {
+export async function recognizeScreenshot(worker: Worker, filePath: string) {
   const originalBuffer = await fs.readFile(filePath);
   const metadata = await sharp(originalBuffer).metadata();
   if (!metadata.width || !metadata.height) throw new Error('IMAGE_DIMENSIONS_UNREADABLE');
   // Nei normali screenshot desktop il pannello usage occupa circa il 20% a sinistra.
   // Il ritaglio rimuove il testo estraneo che altera l'ordine OCR; sulle immagini
   // strette viene mantenuta l'intera larghezza.
-  const regionWidth = metadata.width >= 900
-    ? Math.min(metadata.width, Math.max(360, Math.round(metadata.width * 0.2)))
-    : metadata.width;
-  const usageRegion = { left: 0, top: 0, width: regionWidth, height: metadata.height };
-  const timestampLeft = Math.max(0, Math.round(metadata.width * 0.78));
-  const timestampTop = Math.max(0, Math.round(metadata.height * 0.82));
+  const regionWidth = Math.min(
+    metadata.width,
+    Math.max(360, Math.min(600, Math.round(metadata.width * 0.22))),
+  );
+  const usageRegion = {
+    left: 0,
+    top: 0,
+    width: regionWidth,
+    height: Math.min(metadata.height, Math.max(300, Math.round(metadata.height * 0.9))),
+  };
+  const timestampLeft = Math.max(0, Math.round(metadata.width * 0.72));
+  const timestampTop = Math.max(0, Math.round(metadata.height * 0.78));
   const timestampRegion = {
     left: timestampLeft,
     top: timestampTop,
     width: metadata.width - timestampLeft,
     height: metadata.height - timestampTop,
   };
-  const [cropNormalized, cropSoft, timestampNormalized, timestampSoft, timestampThreshold] = await Promise.all([
+  const [cropNormalized, cropNormalized4x, timestampNormalized, timestampSoft, timestampThreshold] = await Promise.all([
     sharp(originalBuffer)
       .extract(usageRegion)
-      .resize({ width: 1800, withoutEnlargement: false, fit: 'inside' })
+      .resize({ width: usageRegion.width * 3, kernel: sharp.kernel.lanczos3 })
       .grayscale()
       .normalize()
       .sharpen()
@@ -154,9 +185,9 @@ async function recognize(worker: Worker, filePath: string) {
       .toBuffer(),
     sharp(originalBuffer)
       .extract(usageRegion)
-      .resize({ width: 1800, withoutEnlargement: false, fit: 'inside' })
+      .resize({ width: usageRegion.width * 4, kernel: sharp.kernel.lanczos3 })
       .grayscale()
-      .linear(1.25, 8)
+      .normalize()
       .sharpen()
       .png()
       .toBuffer(),
@@ -186,11 +217,15 @@ async function recognize(worker: Worker, filePath: string) {
   ]);
 
   await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
-  const timestampCandidates = (await Promise.all([
-    timestampCandidate(worker, 'timestamp-normalized', timestampNormalized),
-    timestampCandidate(worker, 'timestamp-soft', timestampSoft),
-    timestampCandidate(worker, 'timestamp-threshold', timestampThreshold),
-  ])).filter((item): item is TimestampCandidate => item !== null);
+  const timestampCandidates: TimestampCandidate[] = [];
+  for (const [pass, input] of [
+    ['timestamp-normalized', timestampNormalized],
+    ['timestamp-soft', timestampSoft],
+    ['timestamp-threshold', timestampThreshold],
+  ] as const) {
+    const item = await timestampCandidate(worker, pass, input);
+    if (item) timestampCandidates.push(item);
+  }
   const timestampGroups = new Map<string, TimestampCandidate[]>();
   for (const item of timestampCandidates) {
     const key = item.capturedAt.toISOString();
@@ -210,12 +245,33 @@ async function recognize(worker: Worker, filePath: string) {
   }
   const capturedAt = timestampAgreement[0]!.capturedAt;
 
-  await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-  const candidates = (await Promise.all([
-    candidate(worker, 'original', originalBuffer, capturedAt),
-    candidate(worker, 'crop-normalized', cropNormalized, capturedAt),
-    candidate(worker, 'crop-soft', cropSoft, capturedAt),
-  ])).filter((item): item is Candidate => item !== null);
+  const candidates: Candidate[] = [];
+  await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
+  const panelOriginal = await rectangleCandidate(
+    worker,
+    'left-panel-original',
+    filePath,
+    usageRegion,
+    capturedAt,
+  );
+  if (panelOriginal) candidates.push(panelOriginal);
+  for (const [pass, input] of [
+    ['left-panel-preprocessed', cropNormalized],
+    ['left-panel-preprocessed-4x', cropNormalized4x],
+  ] as const) {
+    const item = await candidate(worker, pass, input, capturedAt);
+    if (item) candidates.push(item);
+  }
+  if (!hasUsageAgreement(candidates)) {
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+    const sparse = await candidate(worker, 'left-panel-sparse-text', cropNormalized, capturedAt);
+    if (sparse) candidates.push(sparse);
+  }
+  if (!hasUsageAgreement(candidates)) {
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+    const fullImage = await candidate(worker, 'full-image-fallback', originalBuffer, capturedAt);
+    if (fullImage) candidates.push(fullImage);
+  }
 
   const groups = new Map<string, Candidate[]>();
   for (const item of candidates) {
@@ -319,7 +375,7 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
     return;
   }
 
-  const result = await recognize(worker, filePath);
+  const result = await recognizeScreenshot(worker, filePath);
   if (!result.accepted) {
     await AppDataSource.transaction(async (manager) => {
       await manager.update(UploadEntity, { id: upload.id }, {
@@ -400,4 +456,4 @@ async function main() {
   }
 }
 
-void main();
+if (require.main === module) void main();
