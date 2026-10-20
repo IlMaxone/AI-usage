@@ -14,5 +14,6 @@ web-app/storage/
 web-app/backups/
 
 projects/*
+!projects/README.md
 !projects/demo/
 !projects/demo/**

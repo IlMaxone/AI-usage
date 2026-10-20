@@ -34,6 +34,7 @@ export interface ModelPricing {
   currency: 'USD' | 'EUR';
   fiveHourWindowCost: number;
   costPerMinute: number;
+  maxTimeWindowMinutes?: number;
   inputPerMillion?: number;
   cachedInputPerMillion?: number;
   outputPerMillion?: number;
@@ -60,6 +61,11 @@ export class AiModelEntity {
   @Column({ type: 'varchar', length: 80 }) reasoning!: string;
   @Column({ name: 'is_default', type: 'boolean', default: false }) isDefault!: boolean;
   @Column({ type: 'jsonb' }) pricing!: ModelPricing;
+  @Column({ name: 'locked_at', type: 'timestamptz', nullable: true }) lockedAt!: Date | null;
+  @Column({ name: 'catalog_key', type: 'varchar', length: 100, nullable: true }) catalogKey!: string | null;
+  @Column({ name: 'catalog_available', type: 'boolean', default: false }) catalogAvailable!: boolean;
+  @Column({ name: 'catalog_sha256', type: 'char', length: 64, nullable: true }) catalogSha256!: string | null;
+  @Column({ name: 'catalog_synced_at', type: 'timestamptz', nullable: true }) catalogSyncedAt!: Date | null;
   @Column({ type: 'jsonb', default: () => "'{}'::jsonb" }) calibration!: ModelCalibration;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
   @Column({ name: 'superseded_at', type: 'timestamptz', nullable: true }) supersededAt!: Date | null;
@@ -129,11 +135,14 @@ export type UploadRole = 'SINGLE' | 'START' | 'END';
 export type UploadStatus = 'DRAFT' | 'UPLOADED' | 'PROCESSING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
 
 @Entity('uploads')
-@Index(['ownerId', 'sha256'], { unique: true, where: 'sha256 IS NOT NULL' })
+@Index(['ownerId', 'projectId', 'sha256'], { where: 'sha256 IS NOT NULL' })
 export class UploadEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
   @Column({ name: 'project_id', type: 'uuid' }) projectId!: string;
+  @Column({ name: 'model_id', type: 'uuid', nullable: true }) modelId!: string | null;
+  @Column({ name: 'model_tagged_at', type: 'timestamptz', nullable: true }) modelTaggedAt!: Date | null;
+  @Column({ name: 'model_tag_only', type: 'boolean', default: false }) modelTagOnly!: boolean;
   @Column({ name: 'event_id', type: 'uuid', nullable: true }) eventId!: string | null;
   @Column({ name: 'record_id', type: 'uuid', nullable: true }) recordId!: string | null;
   @Column({ type: 'varchar', length: 10 }) role!: UploadRole;
@@ -142,6 +151,7 @@ export class UploadEntity {
   @Column({ type: 'varchar', length: 80 }) mime!: string;
   @Column({ type: 'integer' }) size!: number;
   @Column({ type: 'char', length: 64, nullable: true }) sha256!: string | null;
+  @Column({ name: 'inbox_fingerprint', type: 'varchar', length: 160, nullable: true }) inboxFingerprint!: string | null;
   @Column({ type: 'varchar', length: 20, default: 'UPLOADED' }) status!: UploadStatus;
   @Column({ name: 'review_reason', type: 'varchar', length: 500, nullable: true }) reviewReason!: string | null;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;

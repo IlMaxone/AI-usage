@@ -6,11 +6,16 @@ import helmet from 'helmet';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppModule } from './app.module';
+import { DataSource } from 'typeorm';
+import { migrateProjectStorage } from './inbox';
+import { uploadDir } from './storage';
+import { ModelCatalogService } from './model-catalog';
 
 async function bootstrap() {
-  const uploadDir = process.env.UPLOAD_DIR ?? path.resolve('storage/uploads');
   await fs.mkdir(uploadDir, { recursive: true });
   const app = await NestFactory.create(AppModule, { bodyParser: true });
+  await app.get(ModelCatalogService).loadAndSync();
+  await migrateProjectStorage(app.get(DataSource));
   app.setGlobalPrefix('api');
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
   app.enableCors({ origin: (process.env.CORS_ORIGIN ?? 'http://localhost:4200').split(','), credentials: false });

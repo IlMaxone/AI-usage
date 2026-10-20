@@ -37,8 +37,13 @@ export class ApiService {
   private readonly http = inject(HttpClient);
   dashboard() { return this.http.get<Dashboard>(`${API_URL}/dashboard`); }
   projects() { return this.http.get<Project[]>(`${API_URL}/projects`); }
-  createProject(payload: { name: string; color: string; modelId: string }) { return this.http.post<Project>(`${API_URL}/projects`, payload); }
-  updateProject(id: string, payload: { name: string; color: string; modelId: string }) { return this.http.patch<Project>(`${API_URL}/projects/${id}`, payload); }
+  projectInbox(id: string) { return this.http.get<{ folder: string; files: string[] }>(`${API_URL}/projects/${id}/inbox`); }
+  scanInbox(id: string) { return this.http.post<{ imported: number; pending: Array<{ number: string; reason: string }>; ignored: string[] }>(`${API_URL}/projects/${id}/inbox/scan`, {}); }
+  selectProjectImages(id: string) {
+    return this.http.post<{ copied: number; cancelled: boolean }>(`http://127.0.0.1:4410/projects/${id}/select-images`, {});
+  }
+  createProject(payload: { name: string; color: string }) { return this.http.post<Project>(`${API_URL}/projects`, payload); }
+  updateProject(id: string, payload: { name: string; color: string }) { return this.http.patch<Project>(`${API_URL}/projects/${id}`, payload); }
   deleteProject(id: string) { return this.http.delete(`${API_URL}/projects/${id}`); }
   records() { return this.http.get<UsageRecord[]>(`${API_URL}/records`); }
   gallery(projectId: string) { return this.http.get<GalleryUpload[]>(`${API_URL}/records/uploads/gallery`, { params: { projectId } }); }
@@ -53,14 +58,11 @@ export class ApiService {
   }
   deleteRecord(id: string) { return this.http.delete(`${API_URL}/records/${id}`); }
   models() { return this.http.get<AiModel[]>(`${API_URL}/models`); }
-  createModel(payload: object) { return this.http.post<AiModel>(`${API_URL}/models`, payload); }
-  updateModel(id: string, payload: object) { return this.http.patch<AiModel>(`${API_URL}/models/${id}`, payload); }
-  costAnalysis(modelId: string, projectId?: string) {
-    return this.http.get<CostAnalysis>(`${API_URL}/cost-analysis/${modelId}`, {
-      params: projectId ? { projectId } : {},
+  windowPricing() { return this.http.get<{ currency: 'EUR'; fiveHourWindowCost: number }>(`${API_URL}/models/window-pricing`); }
+  costAnalysis(projectId?: string, modelId?: string) {
+    return this.http.get<CostAnalysis>(`${API_URL}/cost-analysis`, {
+      params: { ...(projectId ? { projectId } : {}), ...(modelId ? { explore: 'true', modelId } : {}) },
     });
   }
-  createRule(modelId: string, payload: object) { return this.http.post(`${API_URL}/models/${modelId}/rules`, payload); }
-  addCalibration(modelId: string, payload: object) { return this.http.post(`${API_URL}/models/${modelId}/calibrations`, payload); }
   addCredits(payload: object) { return this.http.post(`${API_URL}/extra-credits`, payload); }
 }

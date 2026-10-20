@@ -14,14 +14,12 @@ import { AuthGuard, PassportStrategy } from '@nestjs/passport';
 import { InjectRepository } from '@nestjs/typeorm';
 import { compare, hash } from 'bcryptjs';
 import { IsEmail, IsString, Length, MinLength } from 'class-validator';
-import { randomUUID } from 'node:crypto';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { DataSource, Repository } from 'typeorm';
 import { IS_PUBLIC_KEY, Public, publicUser } from './common';
+import { ModelCatalogService } from './model-catalog';
 import {
-  AiModelEntity,
   AuditEventEntity,
-  CalculationRuleEntity,
   ProjectEntity,
   UserEntity,
 } from './entities';
@@ -73,6 +71,7 @@ export class AuthController {
     private readonly dataSource: DataSource,
     private readonly jwt: JwtService,
     @InjectRepository(UserEntity) private readonly users: Repository<UserEntity>,
+    private readonly catalog: ModelCatalogService,
   ) {}
 
   @Public()
@@ -88,41 +87,10 @@ export class AuthController {
         displayName: dto.displayName.trim(),
         passwordHash,
       });
-      const logicalKey = randomUUID();
-      const model = await manager.save(AiModelEntity, {
-        ownerId: created.id,
-        logicalKey,
-        version: 1,
-        provider: 'OpenAI',
-        name: 'GPT-5.6 Sol',
-        reasoning: 'high',
-        isDefault: true,
-        pricing: {
-          currency: 'USD',
-          fiveHourWindowCost: 0,
-          costPerMinute: 0,
-        },
-        calibration: {},
-      });
-      await manager.save(CalculationRuleEntity, {
-        ownerId: created.id,
-        modelId: model.id,
-        logicalKey: randomUUID(),
-        version: 1,
-        name: 'Crediti calibrati per finestra 5h',
-        outputUnit: 'crediti',
-        isDefault: true,
-        expression: {
-          operation: 'multiply',
-          args: [
-            { operation: 'divide', args: [{ variable: 'usedPct' }, 100] },
-            { variable: 'fullWindowCredits' },
-          ],
-        },
-      });
+      await this.catalog.syncOwner(manager, created.id);
       await manager.save(ProjectEntity, {
         ownerId: created.id,
-        modelId: model.id,
+        modelId: null,
         name: 'Generale',
         color: '#9BE15D',
       });

@@ -15,6 +15,7 @@ import { HealthController } from './health';
 import { ModelsController } from './models';
 import { ProjectsController } from './projects';
 import { RecordsController } from './records';
+import { ModelCatalogService } from './model-catalog';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { RecordsController } from './records';
     ExtraCreditsController,
   ],
   providers: [
+    ModelCatalogService,
     AuditService,
     FormulaService,
     JwtStrategy,

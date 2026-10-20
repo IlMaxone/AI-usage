@@ -4,9 +4,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 import { createWorker, PSM, Worker } from 'tesseract.js';
+import { IsNull } from 'typeorm';
 import { AppDataSource } from './database';
-import { AuditEventEntity, UploadEntity, UsageRecordEntity, UsageRecordStatus, UsageSnapshotEntity } from './entities';
+import { AiModelEntity, AuditEventEntity, ProjectEntity, UploadEntity, UsageRecordEntity, UsageRecordStatus, UsageSnapshotEntity } from './entities';
 import { parseScreenshotCapturedAt } from './ocr-time';
+import { scanProjectInbox } from './inbox';
+import { projectFolderName, relativeStorageKey, resolveStoredFile } from './storage';
+import { recognizeModelTag } from './ocr-model';
 
 interface ParsedUsage {
   fiveHourRemainingPct: number;
@@ -348,34 +352,20 @@ async function refreshRecordStatus(recordId: string | null): Promise<void> {
       if (start && end && resetOffsetMs > 60 * 60_000) {
         status = 'MANUAL_REVIEW';
       }
+      if (new Set(uploads.map((item) => item.modelId)).size !== 1 || uploads.some((item) => !item.modelId)) status = 'MANUAL_REVIEW';
     }
   }
   await records.update(recordId, { status });
 }
 
-async function processUpload(worker: Worker, upload: UploadEntity): Promise<void> {
-  const uploadDir = process.env.UPLOAD_DIR ?? path.resolve('storage/uploads');
-  const filePath = path.resolve(uploadDir, upload.storageKey);
-  if (!filePath.startsWith(path.resolve(uploadDir) + path.sep)) throw new Error('INVALID_STORAGE_KEY');
+export async function processUpload(worker: Worker, upload: UploadEntity): Promise<void> {
+  const filePath = resolveStoredFile(upload.storageKey);
   const buffer = await fs.readFile(filePath);
   const imageSha256 = createHash('sha256').update(buffer).digest('hex');
-  const duplicate = await AppDataSource.getRepository(UploadEntity)
-    .createQueryBuilder('upload')
-    .where('upload.owner_id = :ownerId', { ownerId: upload.ownerId })
-    .andWhere('upload.sha256 = :sha', { sha: imageSha256 })
-    .andWhere('upload.id <> :id', { id: upload.id })
-    .getOne();
-  if (duplicate) {
-    await AppDataSource.getRepository(UploadEntity).update(upload.id, {
-      status: 'MANUAL_REVIEW',
-      reviewReason: 'Immagine già registrata; nessun nuovo snapshot creato.',
-      processedAt: new Date(),
-    });
-    await refreshRecordStatus(upload.recordId);
-    return;
-  }
-
   const result = await recognizeScreenshot(worker, filePath);
+  if (createHash('sha256').update(await fs.readFile(filePath)).digest('hex') !== imageSha256) {
+    throw new Error('IMAGE_CHANGED_DURING_OCR');
+  }
   if (!result.accepted) {
     await AppDataSource.transaction(async (manager) => {
       await manager.update(UploadEntity, { id: upload.id }, {
@@ -396,56 +386,139 @@ async function processUpload(worker: Worker, upload: UploadEntity): Promise<void
     return;
   }
 
-  await AppDataSource.transaction(async (manager) => {
-    await manager.insert(UsageSnapshotEntity, {
+  const models = await AppDataSource.getRepository(AiModelEntity).find({ where: { ownerId: upload.ownerId, catalogAvailable: true, supersededAt: IsNull() } });
+  const modelTag = await recognizeModelTag(worker, filePath, models);
+  if (!modelTag || (upload.modelId && upload.modelId !== modelTag.modelId)) {
+    await AppDataSource.getRepository(UploadEntity).update(upload.id, {
+      status: 'MANUAL_REVIEW', processedAt: new Date(),
+      reviewReason: !modelTag ? 'Modello/reasoning non riconosciuto con due letture concordi nel catalogo.' : 'Il modello letto contraddice il tag OCR originale, che è immutabile.',
+    });
+    await refreshRecordStatus(upload.recordId);
+    return;
+  }
+  if (createHash('sha256').update(await fs.readFile(filePath)).digest('hex') !== imageSha256) throw new Error('IMAGE_CHANGED_DURING_OCR');
+
+  const project = await AppDataSource.getRepository(ProjectEntity).findOneByOrFail({ id: upload.projectId });
+  const destination = resolveStoredFile(`${projectFolderName(project)}/processed/${upload.id}${path.extname(upload.originalName).toLowerCase()}`);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const moved = filePath !== destination;
+  const backup = `${destination}.previous`;
+  let backedUp = false;
+  if (moved) {
+    try { await fs.rename(destination, backup); backedUp = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    try { await fs.rename(filePath, destination); }
+    catch (error) { if (backedUp) await fs.rename(backup, destination); throw error; }
+  }
+  try {
+    await AppDataSource.transaction(async (manager) => {
+    await manager.query("SELECT set_config('app.allow_ocr_replace', 'on', true)");
+    await manager.query("SELECT set_config('app.allow_model_tag', 'on', true)");
+    await manager.upsert(UsageSnapshotEntity, {
       uploadId: upload.id,
       capturedAt: result.capturedAt,
       ...result.usage,
       ocrConfidence: result.confidence,
-      validation: result.validation,
-    });
+      validation: { ...result.validation, modelId: modelTag.modelId, modelMatchingPasses: modelTag.matchingPasses },
+      createdAt: new Date(),
+    }, ['uploadId']);
     await manager.update(UploadEntity, { id: upload.id }, {
       sha256: imageSha256,
       status: 'VALIDATED',
       reviewReason: null,
       processedAt: new Date(),
+      storageKey: relativeStorageKey(destination),
+      modelId: modelTag.modelId,
     });
     await manager.insert(AuditEventEntity, {
       ownerId: upload.ownerId,
       action: 'OCR_VALIDATED',
       entityType: 'upload',
       entityId: upload.id,
-      metadata: { matchingPasses: result.validation.matchingPasses, fullOcrTextStored: false },
+      metadata: { matchingPasses: result.validation.matchingPasses, modelId: modelTag.modelId, modelMatchingPasses: modelTag.matchingPasses, fullOcrTextStored: false },
+    });
+    });
+  } catch (error) {
+    if (moved) await fs.rename(destination, filePath);
+    if (backedUp) await fs.rename(backup, destination);
+    throw error;
+  }
+  if (backedUp) await fs.unlink(backup);
+  await refreshRecordStatus(upload.recordId);
+}
+
+// Enrich historical validated screenshots without rewriting their usage data.
+export async function tagHistoricalUpload(worker: Worker, upload: UploadEntity) {
+  const filePath = resolveStoredFile(upload.storageKey);
+  const before = createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
+  if (upload.sha256 && upload.sha256 !== before) throw new Error('IMAGE_HASH_CHANGED');
+  const models = await AppDataSource.getRepository(AiModelEntity).find({ where: { ownerId: upload.ownerId, catalogAvailable: true, supersededAt: IsNull() } });
+  const tag = await recognizeModelTag(worker, filePath, models);
+  const after = createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
+  if (before !== after) throw new Error('IMAGE_CHANGED_DURING_OCR');
+  await AppDataSource.transaction(async (manager) => {
+    await manager.query("SELECT set_config('app.allow_model_tag', 'on', true)");
+    await manager.update(UploadEntity, upload.id, tag ? {
+      modelId: tag.modelId, status: 'VALIDATED', reviewReason: null, modelTagOnly: false,
+    } : { status: 'MANUAL_REVIEW', modelTagOnly: false, reviewReason: 'Modello/reasoning non riconosciuto con due letture concordi nel catalogo.' });
+    await manager.insert(AuditEventEntity, {
+      ownerId: upload.ownerId, action: tag ? 'OCR_MODEL_TAGGED' : 'OCR_MODEL_REQUIRES_REVIEW', entityType: 'upload', entityId: upload.id,
+      metadata: tag ? { modelId: tag.modelId, modelMatchingPasses: tag.matchingPasses, historicalUsageUnchanged: true } : { historicalUsageUnchanged: true },
     });
   });
   await refreshRecordStatus(upload.recordId);
 }
 
+async function claimHistoricalUpload() {
+  return AppDataSource.transaction(async (manager) => {
+    const rows = await manager.query("SELECT id FROM uploads WHERE model_id IS NULL AND status = 'VALIDATED' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1") as Array<{ id: string }>;
+    if (!rows[0]) return null;
+    await manager.update(UploadEntity, rows[0].id, { status: 'PROCESSING', modelTagOnly: true });
+    return manager.findOneByOrFail(UploadEntity, { id: rows[0].id });
+  });
+}
+
 async function main() {
   await AppDataSource.initialize();
+  await AppDataSource.query("UPDATE uploads SET status = 'VALIDATED', model_tag_only = false WHERE status = 'PROCESSING' AND model_tag_only = true");
+  await AppDataSource.getRepository(UploadEntity).createQueryBuilder().update()
+    .set({ status: 'UPLOADED', reviewReason: null }).where("status = 'PROCESSING'").execute();
   const cachePath = process.env.OCR_CACHE_DIR ?? path.resolve('storage/ocr-cache');
   await fs.mkdir(cachePath, { recursive: true });
   const worker = await createWorker('eng', 1, { cachePath });
   const pollInterval = Math.max(500, Number(process.env.OCR_POLL_INTERVAL_MS ?? 2000));
   let stopping = false;
+  let lastScan = 0;
   const stop = () => { stopping = true; };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
   try {
     while (!stopping) {
-      const upload = await claimUpload();
+      if (Date.now() - lastScan >= 5000) {
+        lastScan = Date.now();
+        const projects = await AppDataSource.getRepository(ProjectEntity).find();
+        for (const project of projects) {
+          try { await scanProjectInbox(AppDataSource, project); }
+          catch { console.error('PROJECT_INBOX_SCAN_FAILED', project.id); }
+        }
+      }
+      let upload = await claimUpload();
+      let historical = false;
+      if (!upload) { upload = await claimHistoricalUpload(); historical = Boolean(upload); }
       if (!upload) {
         await new Promise((resolve) => setTimeout(resolve, pollInterval));
         continue;
       }
       try {
-        await processUpload(worker, upload);
+        if (historical) await tagHistoricalUpload(worker, upload);
+        else await processUpload(worker, upload);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'UNKNOWN_ERROR';
         await AppDataSource.getRepository(UploadEntity).update(upload.id, {
           status: 'FAILED',
           reviewReason: message.slice(0, 500),
           processedAt: new Date(),
+          modelTagOnly: false,
         });
         await refreshRecordStatus(upload.recordId);
       }

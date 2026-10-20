@@ -8,6 +8,10 @@ import { DetachedModelCosting1726500000003 } from './migrations/1726500000003-de
 import { WindowTolerance1726500000004 } from './migrations/1726500000004-window-tolerance';
 import { UsageRecordPurge1726500000005 } from './migrations/1726500000005-usage-record-purge';
 import { ProjectModelAssignment1726500000006 } from './migrations/1726500000006-project-model-assignment';
+import { ProjectInbox1726500000007 } from './migrations/1726500000007-project-inbox';
+import { ImmutableModelTags1726500000008 } from './migrations/1726500000008-immutable-model-tags';
+import { ModelTagJobRecovery1726500000009 } from './migrations/1726500000009-model-tag-job-recovery';
+import { CsvModelCatalog1726500000010 } from './migrations/1726500000010-csv-model-catalog';
 
 export function databaseOptions(migrationsRun = false) {
   const url = process.env.DATABASE_URL;
@@ -24,6 +28,10 @@ export function databaseOptions(migrationsRun = false) {
       WindowTolerance1726500000004,
       UsageRecordPurge1726500000005,
       ProjectModelAssignment1726500000006,
+      ProjectInbox1726500000007,
+      ImmutableModelTags1726500000008,
+      ModelTagJobRecovery1726500000009,
+      CsvModelCatalog1726500000010,
     ],
     migrationsRun,
     synchronize: false,

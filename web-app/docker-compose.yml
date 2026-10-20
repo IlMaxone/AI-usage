@@ -30,10 +30,14 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Define JWT_SECRET in .env}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
-      UPLOAD_DIR: /data/uploads
+      UPLOAD_DIR: /data/projects
+      LEGACY_UPLOAD_DIR: /data/legacy-uploads
+      MODEL_CATALOG_PATH: /config/models/models.csv
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
     volumes:
-      - ./storage/uploads:/data/uploads
+      - ../projects:/data/projects
+      - ./storage/uploads:/data/legacy-uploads
+      - ../models:/config/models:ro
     depends_on:
       db:
         condition: service_healthy
@@ -56,11 +60,11 @@ services:
       NODE_ENV: production
       TZ: Europe/Rome
       DATABASE_URL: postgresql://${POSTGRES_USER:-ai_usage}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ai_usage}
-      UPLOAD_DIR: /data/uploads
+      UPLOAD_DIR: /data/projects
       OCR_CACHE_DIR: /opt/ocr-cache
       OCR_POLL_INTERVAL_MS: ${OCR_POLL_INTERVAL_MS:-2000}
     volumes:
-      - ./storage/uploads:/data/uploads
+      - ../projects:/data/projects
     depends_on:
       api:
         condition: service_healthy

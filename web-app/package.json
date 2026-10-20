@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "start:windows": "node scripts/start-windows.mjs",
+    "desktop:picker": "node scripts/desktop-picker.mjs",
     "db:backup": "node scripts/db-backup.mjs",
     "db:reset": "node scripts/db-reset.mjs",
     "db:reset:with-backup": "node scripts/db-reset.mjs --backup"

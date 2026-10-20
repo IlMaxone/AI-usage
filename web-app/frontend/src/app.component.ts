@@ -8,14 +8,15 @@ import { AiModel, CostAnalysis, Dashboard, GalleryUpload, Project, Reading, Usag
 
 type Tab = 'overview' | 'analytics' | 'projects' | 'insert' | 'records' | 'analysis' | 'models';
 type AnalysisImage = GalleryUpload & { url: string };
-type FileSlot = 'single' | 'start' | 'end';
+type FileSlot = 'single';
 type SelectedFileBatch = { count: number; name: string; size: string };
 type AnalysisImageGroup = {
   key: string; recordId: string | null; mode: 'CONSTANT' | 'SEGMENT'; images: AnalysisImage[]; capturedAt: string | null;
 };
 type ProjectCostSummary = {
   project: Project;
-  model: CostAnalysis['model'] | null;
+  modelNames: string;
+  unpricedRecords: number;
   estimatedMinutes: number | null;
   estimatedCost: number;
 };
@@ -23,7 +24,7 @@ type UsageChartPoint = {
   id: string; x: number; fiveHourY: number; weeklyY: number; fiveHourUsedPct: number; weeklyUsedPct: number;
   shortLabel: string; fullLabel: string;
 };
-const localizedDecimalPattern = /^(?:0|[1-9]\d*)(?:[.,]\d+)?$/;
+
 const maximumBatchSize = 30;
 
 function localDateTime(value: Date | string = new Date()) {
@@ -52,16 +53,27 @@ export class AppComponent implements OnDestroy {
   readonly models = signal<AiModel[]>([]);
   readonly costAnalysis = signal<CostAnalysis | null>(null);
   readonly costAnalysisLoading = signal(false);
+  readonly explorationEnabled = signal(false);
+  readonly fixedWindow = signal<{ currency: 'EUR'; fiveHourWindowCost: number } | null>(null);
+  private costRequest = 0;
   readonly overviewProjectAnalyses = signal<ReadonlyMap<string, CostAnalysis>>(new Map());
   readonly overviewCostLoading = signal(false);
   readonly costModelId = signal('');
   readonly costProjectId = signal('');
   readonly recordsProjectId = signal('');
   readonly editingProjectId = signal<string | null>(null);
-  readonly editingModelId = signal<string | null>(null);
+
   readonly correctionTarget = signal<{ recordId: string; uploadId: string; label: string } | null>(null);
-  readonly selectedFiles = signal<Record<FileSlot, SelectedFileBatch | null>>({ single: null, start: null, end: null });
+  readonly selectedFiles = signal<Record<FileSlot, SelectedFileBatch | null>>({ single: null });
   readonly uploadFeedback = signal('');
+  readonly pickerBusy = signal(false);
+  readonly inboxFiles = signal<string[]>([]);
+  readonly inboxIssues = signal<Array<{ number: string; reason: string }>>([]);
+  readonly projectInboxPath = computed(() => {
+    const project = this.projects().find((item) => item.id === this.inboxProjectId());
+    return project?.folder ? `${project.folder}/to-process` : '';
+  });
+  readonly inboxProjectId = signal('');
   readonly analysisImages = signal<AnalysisImage[]>([]);
   readonly analysisLoading = signal(false);
   readonly analysisProjectId = signal('');
@@ -118,9 +130,10 @@ export class AppComponent implements OnDestroy {
         : items.reduce((total, item) => total + (item.estimatedUsageMinutes ?? 0), 0);
       return {
         project,
-        model: analysis?.model ?? null,
+        modelNames: [...new Set(items.flatMap((item) => item.sourceModel ? [item.sourceModel.name + ' · ' + item.sourceModel.reasoning] : []))].join(', ') || 'In attesa del tag OCR',
+        unpricedRecords: analysis?.summary.unpricedRecords ?? 0,
         estimatedMinutes,
-        estimatedCost: items.reduce((total, item) => total + item.estimatedCost, 0),
+        estimatedCost: items.reduce((total, item) => total + (item.estimatedCost ?? 0), 0),
       };
     });
   });
@@ -149,8 +162,6 @@ export class AppComponent implements OnDestroy {
   readonly fiveHourChartLine = computed(() => this.usageChartPoints().map((point) => `${point.x},${point.fiveHourY}`).join(' '));
   readonly weeklyChartLine = computed(() => this.usageChartPoints().map((point) => `${point.x},${point.weeklyY}`).join(' '));
   private singleFiles: File[] = [];
-  private startFiles: File[] = [];
-  private endFiles: File[] = [];
   private readonly fileInputs: Partial<Record<FileSlot, HTMLInputElement>> = {};
   private readonly poller: ReturnType<typeof setInterval>;
 
@@ -162,12 +173,10 @@ export class AppComponent implements OnDestroy {
   readonly projectForm = new FormGroup({
     name: new FormControl('', { nonNullable: true, validators: Validators.required }),
     color: new FormControl('#9BE15D', { nonNullable: true }),
-    modelId: new FormControl('', { nonNullable: true, validators: Validators.required }),
   });
   readonly editProjectForm = new FormGroup({
     name: new FormControl('', { nonNullable: true, validators: Validators.required }),
     color: new FormControl('#9BE15D', { nonNullable: true }),
-    modelId: new FormControl('', { nonNullable: true, validators: Validators.required }),
   });
   readonly recordForm = new FormGroup({
     projectId: new FormControl('', { nonNullable: true, validators: Validators.required }),
@@ -181,15 +190,6 @@ export class AppComponent implements OnDestroy {
     weeklyResetsOn: new FormControl(new Date().toISOString().slice(0, 10), { nonNullable: true, validators: Validators.required }),
     reason: new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.minLength(3)] }),
   });
-  readonly modelForm = new FormGroup({
-    provider: new FormControl('OpenAI', { nonNullable: true, validators: Validators.required }),
-    name: new FormControl('', { nonNullable: true, validators: Validators.required }),
-    reasoning: new FormControl('high', { nonNullable: true, validators: Validators.required }),
-    currency: new FormControl<'USD' | 'EUR'>('USD', { nonNullable: true }),
-    fiveHourWindowCost: new FormControl('0', { nonNullable: true, validators: [Validators.required, Validators.pattern(localizedDecimalPattern)] }),
-    costPerMinute: new FormControl('0', { nonNullable: true, validators: [Validators.required, Validators.pattern(localizedDecimalPattern)] }),
-    isDefault: new FormControl(false, { nonNullable: true }),
-  });
   readonly creditsForm = new FormGroup({
     credits: new FormControl(0, { nonNullable: true, validators: Validators.min(1) }),
     paidEur: new FormControl(0, { nonNullable: true, validators: Validators.min(.01) }),
@@ -198,10 +198,16 @@ export class AppComponent implements OnDestroy {
 
   constructor() {
     if (this.auth.user()) this.refresh();
-    this.poller = setInterval(() => { if (this.auth.user() && this.activeValidations()) this.refreshRecords(); }, 4000);
+    this.poller = setInterval(() => {
+      if (!this.auth.user()) return;
+      const pendingTags = this.records().some((record) => [record.single, record.start, record.end].some((reading) => reading?.upload && ['VALIDATED', 'PROCESSING'].includes(reading.upload.status) && !reading.upload.modelId));
+      if (this.activeValidations() || pendingTags || ['insert', 'records'].includes(this.tab())) this.refreshRecords();
+      if (this.tab() === 'insert' && this.recordForm.controls.mode.value === 'SEGMENT') this.refreshInbox();
+    }, 4000);
   }
   ngOnDestroy() { clearInterval(this.poller); this.releaseAnalysisImages(); }
   setTab(tab: Tab) {
+    if (tab !== 'analytics') { this.explorationEnabled.set(false); this.costModelId.set(''); this.costAnalysis.set(null); this.costRequest++; }
     this.tab.set(tab); this.clearFeedback();
     if (tab === 'records') {
       this.recordsProjectId.set(this.recordsProjectId() || this.recordProjects()[0]?.id || '');
@@ -211,7 +217,8 @@ export class AppComponent implements OnDestroy {
       this.analysisProjectId.set(this.analysisProjectId() || this.recordProjects()[0]?.id || '');
       this.loadAnalysisImages();
     }
-    if (tab === 'models') this.loadCostAnalysis();
+    if (tab === 'analytics') this.loadCostAnalysis();
+    if (tab === 'insert') this.refreshInbox();
   }
 
   submitAuth() {
@@ -222,6 +229,7 @@ export class AppComponent implements OnDestroy {
     request.subscribe({ next: () => { this.loading.set(false); this.refresh(); }, error: (error) => this.fail(error) });
   }
   logout() {
+    this.explorationEnabled.set(false); this.costModelId.set(''); this.costRequest++;
     this.releaseAnalysisImages(); this.auth.logout(); this.dashboard.set(null);
     this.projects.set([]); this.records.set([]); this.models.set([]); this.costAnalysis.set(null);
     this.overviewProjectAnalyses.set(new Map());
@@ -229,12 +237,13 @@ export class AppComponent implements OnDestroy {
   }
   refresh(preserveFeedback = false) {
     this.loading.set(true); if (!preserveFeedback) this.clearFeedback();
-    forkJoin({ dashboard: this.api.dashboard(), projects: this.api.projects(), records: this.api.records(), models: this.api.models() }).subscribe({
-      next: ({ dashboard, projects, records, models }) => {
+    forkJoin({ dashboard: this.api.dashboard(), projects: this.api.projects(), records: this.api.records(), models: this.api.models(), window: this.api.windowPricing() }).subscribe({
+      next: ({ dashboard, projects, records, models, window }) => {
+        this.fixedWindow.set(window);
         this.dashboard.set(dashboard); this.projects.set(projects); this.records.set(records); this.models.set(models);
         this.applyDefaults(projects, models); this.loading.set(false);
         this.loadOverviewCostAnalysis();
-        if (this.tab() === 'models') this.loadCostAnalysis();
+        if (this.tab() === 'analytics') this.loadCostAnalysis();
       },
       error: (error) => this.fail(error),
     });
@@ -244,7 +253,7 @@ export class AppComponent implements OnDestroy {
     if (this.projectForm.invalid) return;
     this.api.createProject(this.projectForm.getRawValue()).subscribe({
       next: () => {
-        this.projectForm.reset({ name: '', color: '#9BE15D', modelId: this.defaultModelId() });
+        this.projectForm.reset({ name: '', color: '#9BE15D' });
         this.succeed('Progetto creato.'); this.refresh(true);
       },
       error: (error) => this.fail(error),
@@ -252,7 +261,7 @@ export class AppComponent implements OnDestroy {
   }
   editProject(project: Project) {
     this.editingProjectId.set(project.id);
-    this.editProjectForm.setValue({ name: project.name, color: project.color, modelId: project.modelId || this.defaultModelId() });
+    this.editProjectForm.setValue({ name: project.name, color: project.color });
   }
   chooseProjectColor(color: string, editing = false) {
     (editing ? this.editProjectForm : this.projectForm).controls.color.setValue(color);
@@ -295,36 +304,63 @@ export class AppComponent implements OnDestroy {
         size: `${(totalBytes / 1_048_576).toFixed(2)} MB totali`,
       } : null,
     }));
-    this.uploadFeedback.set(files.length ? `${files.length} ${files.length === 1 ? 'immagine selezionata' : 'immagini selezionate'} per ${slot === 'single' ? 'batch separati' : slot === 'start' ? 'gli inizi' : 'le fini'}.` : '');
+    this.uploadFeedback.set(files.length ? `${files.length} ${files.length === 1 ? 'immagine selezionata' : 'immagini selezionate'} per letture separate.` : '');
     this.error.set('');
   }
+  refreshInbox() {
+    const id = this.recordForm.controls.projectId.value;
+    if (id !== this.inboxProjectId()) this.inboxIssues.set([]);
+    this.inboxProjectId.set(id);
+    if (!id) { this.inboxFiles.set([]); return; }
+    this.api.projectInbox(id).subscribe({
+      next: (inbox) => { if (id === this.recordForm.controls.projectId.value) this.inboxFiles.set(inbox.files); },
+      error: (error) => this.fail(error),
+    });
+  }
+  selectProjectImages() {
+    const id = this.recordForm.controls.projectId.value;
+    if (!id || this.pickerBusy()) return;
+    this.pickerBusy.set(true); this.clearFeedback();
+    this.api.selectProjectImages(id).subscribe({
+      next: (result) => {
+        this.pickerBusy.set(false);
+        if (!result.cancelled) this.succeed(`${result.copied} immagini nella cartella del progetto. Il worker elaborerà le coppie A/B automaticamente.`);
+        this.refreshInbox();
+      },
+      error: (error: HttpErrorResponse) => {
+        this.pickerBusy.set(false);
+        if (error.status === 0) this.error.set('Il selettore Windows non è raggiungibile. Avvia l’app con npm run start:windows dalla cartella web-app.');
+        else this.fail(error);
+      },
+    });
+  }
+  scanProjectFolder() {
+    const id = this.recordForm.controls.projectId.value;
+    if (!id) return;
+    this.loading.set(true); this.clearFeedback();
+    this.api.scanInbox(id).subscribe({
+      next: (result) => {
+        this.loading.set(false); this.inboxIssues.set(result.pending); this.refreshInbox(); this.refreshRecords();
+        this.succeed(`${result.imported} coppie accodate. I file già in coda o invariati restano senza duplicati.`);
+      }, error: (error) => this.fail(error),
+    });
+  }
   batchReady() {
-    const selected = this.selectedFiles();
-    return this.recordForm.controls.mode.value === 'CONSTANT'
-      ? Boolean(selected.single?.count)
-      : Boolean(selected.start?.count && selected.start.count === selected.end?.count);
+    return Boolean(this.selectedFiles().single?.count);
   }
   plannedBatchCount() {
-    const selected = this.selectedFiles();
-    return this.recordForm.controls.mode.value === 'CONSTANT' ? selected.single?.count ?? 0 : selected.start?.count ?? 0;
+    return this.selectedFiles().single?.count ?? 0;
   }
   startValidation() {
     if (this.recordForm.invalid) return;
     const value = this.recordForm.getRawValue();
-    if (value.mode === 'CONSTANT' && !this.singleFiles.length) { this.error.set('Seleziona almeno uno screenshot della rilevazione.'); return; }
-    if (value.mode === 'SEGMENT' && (!this.startFiles.length || !this.endFiles.length)) { this.error.set('Seleziona gli screenshot iniziali e finali.'); return; }
-    if (value.mode === 'SEGMENT' && this.startFiles.length !== this.endFiles.length) {
-      this.error.set(`Le selezioni non coincidono: ${this.startFiles.length} immagini iniziali e ${this.endFiles.length} finali.`); return;
-    }
-    const batchCount = value.mode === 'CONSTANT' ? this.singleFiles.length : this.startFiles.length;
+    if (value.mode === 'SEGMENT') { this.scanProjectFolder(); return; }
+    if (!this.singleFiles.length) { this.error.set('Seleziona almeno uno screenshot della rilevazione.'); return; }
+    const batchCount = this.singleFiles.length;
     const body = new FormData();
     body.append('projectId', value.projectId); body.append('mode', value.mode);
     if (value.note) body.append('note', value.note);
-    if (value.mode === 'CONSTANT') this.singleFiles.forEach((file) => body.append('single', file));
-    else {
-      this.startFiles.forEach((file) => body.append('start', file));
-      this.endFiles.forEach((file) => body.append('end', file));
-    }
+    this.singleFiles.forEach((file) => body.append('single', file));
     this.loading.set(true); this.clearFeedback();
     this.uploadFeedback.set(`Caricamento di ${batchCount} ${batchCount === 1 ? 'batch' : 'batch separati'}…`);
     this.api.createRecordBatch(body).pipe(
@@ -342,13 +378,11 @@ export class AppComponent implements OnDestroy {
     });
   }
   private setSlotFiles(slot: FileSlot, files: File[]) {
-    if (slot === 'single') this.singleFiles = files;
-    else if (slot === 'start') this.startFiles = files;
-    else this.endFiles = files;
+    this.singleFiles = files;
   }
   private clearSelectedFiles() {
-    this.singleFiles = []; this.startFiles = []; this.endFiles = [];
-    this.selectedFiles.set({ single: null, start: null, end: null });
+    this.singleFiles = [];
+    this.selectedFiles.set({ single: null });
     for (const input of Object.values(this.fileInputs)) if (input) input.value = '';
   }
   retryValidation(id: string) {
@@ -368,9 +402,9 @@ export class AppComponent implements OnDestroy {
     });
   }
   deleteRecord(id: string) {
-    if (!window.confirm('Eliminare definitivamente questa rilevazione, gli screenshot e tutti i dati OCR collegati? L’operazione non è reversibile.')) return;
+    if (!window.confirm('Eliminare la rilevazione dall’app? Gli screenshot saranno conservati nella cartella deleted del progetto e potranno essere recuperati.')) return;
     this.api.deleteRecord(id).subscribe({
-      next: () => { this.succeed('Rilevazione e screenshot eliminati definitivamente. Ora puoi ricaricarli in un altro progetto.'); this.refresh(true); },
+      next: () => { this.succeed('Rilevazione eliminata. Screenshot conservati in deleted nella cartella del progetto.'); this.refresh(true); },
       error: (error) => this.fail(error),
     });
   }
@@ -401,72 +435,31 @@ export class AppComponent implements OnDestroy {
     });
   }
 
-  createModel() {
-    if (this.modelForm.invalid) return;
-    const value = this.modelForm.getRawValue();
-    const fiveHourWindowCost = this.parseLocalizedDecimal(value.fiveHourWindowCost);
-    const costPerMinute = this.parseLocalizedDecimal(value.costPerMinute);
-    if (!Number.isFinite(fiveHourWindowCost) || !Number.isFinite(costPerMinute)) {
-      this.error.set('Inserisci costi validi, usando la virgola o il punto come separatore decimale.');
-      return;
-    }
-    const payload = { provider: value.provider, name: value.name, reasoning: value.reasoning, isDefault: value.isDefault, pricing: {
-      currency: value.currency, fiveHourWindowCost, costPerMinute,
-    } };
-    const request = this.editingModelId()
-      ? this.api.updateModel(this.editingModelId()!, payload)
-      : this.api.createModel(payload);
-    request.subscribe({
-      next: () => { this.cancelModelEdit(); this.succeed('Modello salvato.'); this.refresh(true); },
-      error: (error) => this.fail(error),
-    });
-  }
-  draftReferenceMinutes() {
-    const referenceWindowCost = this.parseLocalizedDecimal(this.modelForm.controls.fiveHourWindowCost.value);
-    const costPerMinute = this.parseLocalizedDecimal(this.modelForm.controls.costPerMinute.value);
-    return Number.isFinite(referenceWindowCost) && Number.isFinite(costPerMinute) && costPerMinute > 0
-      ? referenceWindowCost / costPerMinute
-      : null;
-  }
-  editModel(model: AiModel) {
-    this.editingModelId.set(model.id);
-    this.modelForm.setValue({
-      provider: model.provider,
-      name: model.name,
-      reasoning: model.reasoning,
-      currency: model.pricing.currency,
-      fiveHourWindowCost: this.formatLocalizedDecimal(model.pricing.fiveHourWindowCost),
-      costPerMinute: this.formatLocalizedDecimal(model.pricing.costPerMinute),
-      isDefault: model.isDefault,
-    });
-  }
-  cancelModelEdit() {
-    this.editingModelId.set(null);
-    this.modelForm.reset({ provider: 'OpenAI', name: '', reasoning: 'high', currency: 'USD', fiveHourWindowCost: '0', costPerMinute: '0', isDefault: false });
+  toggleExploration() {
+    const enabled = !this.explorationEnabled();
+    this.explorationEnabled.set(enabled);
+    this.costModelId.set(enabled ? this.models().find((model) => model.pricing.costPerMinute > 0)?.id ?? '' : '');
+    this.loadCostAnalysis();
   }
   selectCostModel(modelId: string) {
+    if (!this.explorationEnabled()) return;
     this.costModelId.set(modelId); this.loadCostAnalysis();
   }
   selectCostProject(projectId: string) {
     this.costProjectId.set(projectId); this.loadCostAnalysis();
   }
   loadCostAnalysis() {
-    const modelId = this.costModelId() || this.models().find((item) => item.isDefault)?.id || this.models()[0]?.id;
-    if (!modelId) { this.costAnalysis.set(null); return; }
-    this.costModelId.set(modelId); this.costAnalysisLoading.set(true);
-    this.api.costAnalysis(modelId, this.costProjectId() || undefined).subscribe({
-      next: (analysis) => { this.costAnalysis.set(analysis); this.costAnalysisLoading.set(false); },
-      error: (error) => { this.costAnalysisLoading.set(false); this.fail(error); },
+    const request = ++this.costRequest;
+    const modelId = this.explorationEnabled() ? this.costModelId() : '';
+    if (this.explorationEnabled() && !modelId) { this.costAnalysis.set(null); return; }
+    this.costAnalysisLoading.set(true);
+    this.api.costAnalysis(this.costProjectId() || undefined, modelId || undefined).subscribe({
+      next: (analysis) => { if (request !== this.costRequest) return; this.costAnalysis.set(analysis); this.costAnalysisLoading.set(false); },
+      error: (error) => { if (request !== this.costRequest) return; this.costAnalysisLoading.set(false); this.fail(error); },
     });
   }
   loadOverviewCostAnalysis() {
-    const fallbackModelId = this.defaultModelId();
-    const requests = this.projects().flatMap((project) => {
-      const modelId = this.models().some((model) => model.id === project.modelId) ? project.modelId! : fallbackModelId;
-      return modelId
-        ? [this.api.costAnalysis(modelId, project.id).pipe(map((analysis) => [project.id, analysis] as const))]
-        : [];
-    });
+    const requests = this.projects().map((project) => this.api.costAnalysis(project.id).pipe(map((analysis) => [project.id, analysis] as const)));
     if (!requests.length) {
       this.overviewProjectAnalyses.set(new Map());
       this.overviewCostLoading.set(false);
@@ -551,31 +544,37 @@ export class AppComponent implements OnDestroy {
   tabTitle() {
     return ({
       overview: 'La scrivania', analytics: 'Analisi usage', projects: 'I progetti', insert: 'Nuova lettura', records: 'Archivio usage',
-      analysis: 'Analisi immagini', models: 'Modelli e conti',
+      analysis: 'Analisi immagini', models: 'Modelli',
     } as Record<Tab, string>)[this.tab()];
   }
   private refreshRecords() {
     this.api.records().subscribe((records) => {
+      const tags = (items: UsageRecord[]) => items.flatMap((record) => [record.single, record.start, record.end].map((reading) => `${reading?.upload?.id}:${reading?.upload?.modelId}:${reading?.upload?.status}`)).sort().join('|');
+      const tagsChanged = tags(records) !== tags(this.records());
       const wasActive = this.activeValidations() > 0; this.records.set(records);
-      if (wasActive && this.activeValidations() === 0) this.refresh();
+      if (tagsChanged || (wasActive && this.activeValidations() === 0)) this.refresh(true);
     });
   }
   private applyDefaults(projects: Project[], models: AiModel[]) {
-    const projectId = this.recordForm.controls.projectId.value || projects[0]?.id || '';
+    const selectedProject = this.recordForm.controls.projectId.value;
+    const projectId = projects.some((project) => project.id === selectedProject) ? selectedProject : projects[0]?.id || '';
     this.recordForm.patchValue({ projectId });
+    this.inboxProjectId.set(projectId);
     const recordProjectIds = new Set(this.recordProjects().map((project) => project.id));
     if (!recordProjectIds.has(this.recordsProjectId())) this.recordsProjectId.set(this.recordProjects()[0]?.id || '');
     if (!recordProjectIds.has(this.analysisProjectId())) this.analysisProjectId.set(projects[0]?.id || '');
-    if (!models.some((model) => model.id === this.costModelId())) {
+    if (this.explorationEnabled() && !models.some((model) => model.id === this.costModelId())) {
       this.costModelId.set(models.find((item) => item.isDefault)?.id || models[0]?.id || '');
     }
-    if (!models.some((model) => model.id === this.projectForm.controls.modelId.value)) {
-      this.projectForm.controls.modelId.setValue(this.defaultModelId(models));
-    }
   }
-  modelLabel(modelId: string | null) {
+  modelLabel(modelId: string | null | undefined) {
     const model = this.models().find((item) => item.id === modelId);
-    return model ? `${model.provider} · ${model.name} · ${model.reasoning}` : 'Modello predefinito';
+    return model ? `${model.provider} · ${model.name} · ${model.reasoning}` : modelId ? 'Modello non disponibile nel CSV' : 'Modello da riconoscere';
+  }
+  modelWindowDuration(model: AiModel) {
+    const minutes = model.pricing.maxTimeWindowMinutes ?? model.pricing.fiveHourWindowCost / model.pricing.costPerMinute;
+    const seconds = Math.round(minutes * 60);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   }
   private defaultModelId(models = this.models()) {
     return models.find((item) => item.isDefault)?.id || models[0]?.id || '';

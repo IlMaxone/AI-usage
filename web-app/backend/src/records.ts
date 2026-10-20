@@ -37,6 +37,9 @@ import {
   UsageSnapshotEntity,
 } from './entities';
 import { incomingDir, projectFolderName, relativeStorageKey, resolveStoredFile, uploadDir } from './storage';
+import { importRecord } from './inbox';
+import { currentObservations } from './observations';
+import { archiveImages, ImageArchive, restoreArchive } from './deleted';
 
 class CreateRecordDto {
   @IsUUID() projectId!: string;
@@ -147,7 +150,7 @@ export class RecordsController {
     const recordById = new Map(records.map((item) => [item.id, item]));
     const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
     const captureTimeByUpload = new Map<string, CaptureTimeObservationEntity>();
-    for (const item of captureTimes) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
+    for (const item of currentObservations(captureTimes, snapshots)) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
     const available = await Promise.all(uploads.map(async (upload) => {
       try {
         await fs.access(storedFilePath(upload.storageKey));
@@ -160,6 +163,8 @@ export class RecordsController {
           mime: upload.mime,
           size: upload.size,
           status: upload.status,
+          modelId: upload.modelId,
+          modelTaggedAt: upload.modelTaggedAt,
           createdAt: upload.createdAt,
           capturedAt: captureTimeByUpload.get(upload.id)?.capturedAt ?? snapshotByUpload.get(upload.id)?.capturedAt ?? null,
           recordDeleted: Boolean(record?.deletedAt),
@@ -240,6 +245,10 @@ export class RecordsController {
     @Body() dto: CreateRecordDto,
     @UploadedFiles() files: RecordFiles = {},
   ) {
+    if (dto.mode === 'SEGMENT') {
+      await Promise.all([...(files.single ?? []), ...(files.start ?? []), ...(files.end ?? [])].map((file) => fs.unlink(file.path).catch(() => undefined)));
+      throw new BadRequestException('Per le coppie usa la cartella to-process del progetto con nomi A1/B1, A2/B2.');
+    }
     return this.persistRecords(user, dto, files, true);
   }
 
@@ -264,7 +273,7 @@ export class RecordsController {
           : 'Il segmento di usage richiede screenshot iniziale e finale');
       }
       const project = await this.validateProject(user.id, dto.projectId);
-      const destination = path.join(uploadDir, projectFolderName(project));
+      const destination = path.join(uploadDir, projectFolderName(project), 'to-process');
       await fs.mkdir(destination, { recursive: true });
       for (const file of allFiles) {
         const movedPath = path.join(destination, file.filename);
@@ -273,50 +282,19 @@ export class RecordsController {
         file.filename = relativeStorageKey(movedPath);
       }
 
-      await this.dataSource.transaction(async (manager) => {
-        for (let index = 0; index < batchSize; index += 1) {
-          const saved = await manager.save(UsageRecordEntity, {
-            ownerId: user.id,
-            projectId: dto.projectId,
-            modelId: null,
-            mode: dto.mode,
-            status: 'DRAFT',
-            note: dto.note?.trim() || null,
-          });
-          const makeUpload = async (file: Express.Multer.File, role: 'SINGLE' | 'START' | 'END') => manager.save(UploadEntity, {
-            ownerId: user.id,
-            projectId: dto.projectId,
-            eventId: null,
-            recordId: saved.id,
-            role,
-            originalName: path.basename(file.originalname).slice(0, 255),
-            storageKey: file.filename,
-            mime: file.mimetype,
-            size: file.size,
-            status: 'DRAFT',
-          });
-          if (dto.mode === 'CONSTANT') {
-            const upload = await makeUpload(singles[index]!, 'SINGLE');
-            saved.singleUploadId = upload.id;
-          } else {
-            const start = await makeUpload(starts[index]!, 'START');
-            const end = await makeUpload(ends[index]!, 'END');
-            saved.startUploadId = start.id;
-            saved.endUploadId = end.id;
-          }
-          await manager.save(UsageRecordEntity, saved);
-          await manager.insert(AuditEventEntity, {
-            ownerId: user.id,
-            action: 'USAGE_RECORD_CREATED',
-            entityType: 'usage_record',
-            entityId: saved.id,
-            metadata: { projectId: dto.projectId, mode: dto.mode, files: dto.mode === 'CONSTANT' ? 1 : 2, batchIndex: index + 1, batchSize },
-          });
-          records.push(saved);
-        }
-      });
+      for (let index = 0; index < batchSize; index += 1) {
+        const image = (file: Express.Multer.File, role: 'SINGLE' | 'START' | 'END') => ({
+          filePath: file.path, originalName: path.basename(file.originalname), role, mime: file.mimetype, size: file.size,
+        });
+        const images = dto.mode === 'CONSTANT' ? [image(singles[index]!, 'SINGLE')]
+          : [image(starts[index]!, 'START'), image(ends[index]!, 'END')];
+        const saved = await importRecord(this.dataSource, project, images, dto.note?.trim() || null, false);
+        if (saved && !records.some((record) => record.id === saved.id)) records.push(saved);
+      }
     } catch (error) {
-      await Promise.all(allFiles.map((file) => fs.unlink(file.path).catch(() => undefined)));
+      const retained = await this.uploads.find({ where: { ownerId: user.id } });
+      const keys = new Set(retained.map((upload) => upload.storageKey));
+      await Promise.all(allFiles.filter((file) => !keys.has(relativeStorageKey(file.path))).map((file) => fs.unlink(file.path).catch(() => undefined)));
       throw error;
     }
     return this.enrich(records, user.id);
@@ -329,8 +307,7 @@ export class RecordsController {
     const uploadIds = this.uploadIds(record);
     const uploads = await this.uploads.find({ where: { id: In(uploadIds), ownerId: user.id, recordId: record.id } });
     if (uploads.length !== uploadIds.length) throw new BadRequestException('Rilevazione incompleta');
-    const queued = uploads.filter((upload) => upload.status !== 'VALIDATED');
-    if (!queued.length) throw new BadRequestException('Rilevazione già convalidata');
+    const queued = uploads;
     await this.dataSource.transaction(async (manager) => {
       await manager.update(UploadEntity, { id: In(queued.map((item) => item.id)) }, {
         status: 'UPLOADED',
@@ -393,17 +370,35 @@ export class RecordsController {
 
   @Delete(':id')
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    await this.owned(id, user.id);
-    const storageKeys = await this.dataSource.transaction(async (manager) => {
+    const record = await this.owned(id, user.id);
+    const project = await this.projects.findOne({ where: { id: record.projectId, ownerId: user.id }, withDeleted: true });
+    if (!project) throw new NotFoundException('Progetto non trovato');
+    let archive: ImageArchive | null = null;
+    try {
+    const count = await this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [project.id]);
       const uploads = await manager.query(`
-        SELECT id, storage_key AS "storageKey", status
+        SELECT id, storage_key AS "storageKey", original_name AS "originalName", role, status
         FROM uploads
         WHERE record_id = $1 AND owner_id = $2
         FOR UPDATE
-      `, [id, user.id]) as Array<{ id: string; storageKey: string; status: string }>;
+      `, [id, user.id]) as Array<{ id: string; storageKey: string; originalName: string; role: string; status: string }>;
       if (uploads.some((upload) => upload.status === 'PROCESSING')) {
         throw new BadRequestException('Attendi la fine dell’OCR prima di eliminare la rilevazione');
       }
+      const archivedFiles = [...uploads];
+      const processedFolder = path.join(uploadDir, projectFolderName(project), 'processed');
+      let processedNames: string[] = [];
+      try { processedNames = await fs.readdir(processedFolder); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      for (const upload of uploads) {
+        for (const name of processedNames.filter((name) => name.startsWith(upload.id + '.'))) {
+          const storageKey = relativeStorageKey(path.join(processedFolder, name));
+          if (storageKey === upload.storageKey) continue;
+          archivedFiles.push({ ...upload, storageKey, originalName: `previous-${upload.originalName}` });
+        }
+      }
+      archive = await archiveImages(path.join(uploadDir, projectFolderName(project), 'deleted', id), archivedFiles);
 
       const uploadIds = uploads.map((upload) => upload.id);
       const relatedIds = [id, ...uploadIds];
@@ -433,19 +428,13 @@ export class RecordsController {
       }
       const deletion = await manager.query('DELETE FROM usage_records WHERE id = $1 AND owner_id = $2 RETURNING id', [id, user.id]) as Array<{ id: string }>;
       if (!deletion.length) throw new NotFoundException('Rilevazione non trovata');
-      return uploads.map((upload) => upload.storageKey);
+      return archivedFiles.length;
     });
-
-    const folders = new Set<string>();
-    await Promise.all(storageKeys.map(async (storageKey) => {
-      const filePath = storedFilePath(storageKey);
-      folders.add(path.dirname(filePath));
-      await fs.unlink(filePath).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-    }));
-    await Promise.all([...folders].map((folder) => fs.rmdir(folder).catch(() => undefined)));
-    return { deleted: true, purgedUploads: storageKeys.length };
+    return { deleted: true, archivedUploads: count, folder: `projects/${projectFolderName(project)}/deleted/${id}` };
+    } catch (error) {
+      if (archive) await restoreArchive(archive);
+      throw error;
+    }
   }
 
   private async enrich(records: UsageRecordEntity[], ownerId: string) {
@@ -461,9 +450,9 @@ export class RecordsController {
     const uploadById = new Map(uploads.map((item) => [item.id, item]));
     const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
     const correctionByUpload = new Map<string, UsageCorrectionEntity>();
-    for (const item of corrections) if (!correctionByUpload.has(item.uploadId)) correctionByUpload.set(item.uploadId, item);
+    for (const item of currentObservations(corrections, snapshots)) if (!correctionByUpload.has(item.uploadId)) correctionByUpload.set(item.uploadId, item);
     const captureTimeByUpload = new Map<string, CaptureTimeObservationEntity>();
-    for (const item of captureTimes) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
+    for (const item of currentObservations(captureTimes, snapshots)) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
     const projectById = new Map(projects.map((item) => [item.id, item]));
     const reading = (uploadId: string | null) => {
       if (!uploadId) return null;
@@ -526,7 +515,7 @@ export class RecordsController {
       ]);
       const effective = new Map<string, SnapshotInput>();
       for (const snapshot of snapshots) effective.set(snapshot.uploadId, snapshot);
-      for (const correction of corrections) if (!effective.has(`correction:${correction.uploadId}`)) {
+      for (const correction of currentObservations(corrections, snapshots)) if (!effective.has(`correction:${correction.uploadId}`)) {
         effective.set(correction.uploadId, correction);
         effective.set(`correction:${correction.uploadId}`, correction);
       }
@@ -536,7 +525,7 @@ export class RecordsController {
         record.startUploadId ? effective.get(record.startUploadId) : undefined,
         record.endUploadId ? effective.get(record.endUploadId) : undefined,
       );
-      status = usage.status === 'WINDOW_MISMATCH' ? 'MANUAL_REVIEW' : 'VALIDATED';
+      status = usage.status === 'WINDOW_MISMATCH' || uploads.some((upload) => !upload.modelId) || new Set(uploads.map((upload) => upload.modelId)).size > 1 ? 'MANUAL_REVIEW' : 'VALIDATED';
     }
     await this.records.update(record.id, { status });
   }

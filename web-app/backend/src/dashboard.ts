@@ -14,6 +14,7 @@ import {
   UsageSnapshotEntity,
 } from './entities';
 import { computeRecordUsage } from './records';
+import { currentObservations } from './observations';
 
 class ExtraCreditsDto {
   @IsInt() @Min(1) credits!: number;
@@ -55,9 +56,9 @@ export class DashboardController {
     const uploadById = new Map(uploads.map((item) => [item.id, item]));
     const snapshotByUpload = new Map(snapshots.map((item) => [item.uploadId, item]));
     const correctionByUpload = new Map<string, UsageCorrectionEntity>();
-    for (const item of corrections) if (!correctionByUpload.has(item.uploadId)) correctionByUpload.set(item.uploadId, item);
+    for (const item of currentObservations(corrections, snapshots)) if (!correctionByUpload.has(item.uploadId)) correctionByUpload.set(item.uploadId, item);
     const captureTimeByUpload = new Map<string, CaptureTimeObservationEntity>();
-    for (const item of captureTimes) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
+    for (const item of currentObservations(captureTimes, snapshots)) if (!captureTimeByUpload.has(item.uploadId)) captureTimeByUpload.set(item.uploadId, item);
     const effective = (uploadId: string | null) => uploadId
       ? correctionByUpload.get(uploadId) ?? snapshotByUpload.get(uploadId)
       : undefined;

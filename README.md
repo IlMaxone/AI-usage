@@ -294,12 +294,22 @@ dashboard statiche esistenti.
 
 L'applicazione aggiunge autenticazione JWT, progetti per utente, upload dal
 browser e rilevazioni con uno screenshot o con coppia inizio/fine. I profili
-economici dei modelli sono separati dall'OCR e possono essere applicati a
-posteriori allo stesso storico; ogni progetto può avere il proprio modello,
-modificabile liberamente dalla UI. Il consumo massimo della finestra 5h e il
-costo al minuto determinano il minutaggio equivalente e il costo attribuito.
+economici dei modelli vengono associati automaticamente alle immagini tramite
+OCR con almeno due letture concordi. Il tag è immutabile; il riferimento della
+finestra 5h è fisso e comune (13,54 EUR). Catalogo e tariffe sono definiti in
+[`models/models.csv`](models/models.csv) e ricaricati all'avvio; la pagina
+**Modelli** è di sola consultazione. I tag originali rimangono immutabili.
+Il CSV dichiara anche `max_time_window_minutes`: i minuti equivalenti sono
+la percentuale attribuita moltiplicata per questo limite, indipendentemente
+dall'arrotondamento della tariffa al minuto. Le durate `93:03` sono minuti:secondi.
+Un interruttore in Analisi usage abilita il confronto
+esplorativo, soltanto temporaneo e senza salvataggio: applica una tariffa diversa
+agli stessi minuti equivalenti originali.
 Il calcolo è lineare e non applica cap a usage, minuti o costo. Nell'archivio
 web, l'eliminazione confermata di una rilevazione
-rimuove anche file, hash e dati OCR collegati, permettendo di ricaricare lo
-screenshot nel progetto corretto. Le istruzioni di avvio e il modello dati sono
+rimuove i record OCR dall'app e conserva gli screenshot in `deleted` per il
+recupero. Le coppie A1/B1, A2/B2 vengono elaborate dalle cartelle locali
+`projects/<nome>--<id>/to-process` e archiviate in `processed`; reinserire una
+stessa immagine aggiorna l'OCR senza duplicare la rilevazione. I contenuti dei
+progetti reali restano esclusi da Git. Le istruzioni di avvio e il modello dati sono
 documentati nel README dedicato.

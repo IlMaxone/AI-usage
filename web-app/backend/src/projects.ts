@@ -1,4 +1,4 @@
-import { Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Post } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsHexColor, IsOptional, IsString, IsUUID, Length } from 'class-validator';
 import { promises as fs } from 'node:fs';
@@ -7,18 +7,17 @@ import { DataSource, IsNull, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuthUser, CurrentUser } from './common';
 import { AiModelEntity, ProjectEntity, UploadEntity } from './entities';
-import { projectFolderName, uploadDir } from './storage';
+import { ensureProjectFolders, projectFolderName, uploadDir } from './storage';
+import { scanProjectInbox } from './inbox';
 
 class ProjectDto {
   @IsString() @Length(1, 100) name!: string;
   @IsOptional() @IsHexColor() color?: string;
-  @IsOptional() @IsUUID() modelId?: string;
 }
 
 class UpdateProjectDto {
   @IsOptional() @IsString() @Length(1, 100) name?: string;
   @IsOptional() @IsHexColor() color?: string;
-  @IsOptional() @IsUUID() modelId?: string;
 }
 
 @Controller('projects')
@@ -32,8 +31,22 @@ export class ProjectsController {
   ) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser) {
-    return this.projects.find({ where: { ownerId: user.id }, order: { name: 'ASC' } });
+  async list(@CurrentUser() user: AuthUser) {
+    const projects = await this.projects.find({ where: { ownerId: user.id }, order: { name: 'ASC' } });
+    return projects.map((project) => ({ ...project, folder: `projects/${projectFolderName(project)}` }));
+  }
+
+  @Get(':id/inbox')
+  async inbox(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    const project = await this.owned(id, user.id);
+    const root = await ensureProjectFolders(project);
+    const entries = await fs.readdir(path.join(root, 'to-process'), { withFileTypes: true });
+    return { folder: `projects/${projectFolderName(project)}`, files: entries.filter((entry) => entry.isFile()).map((entry) => entry.name) };
+  }
+
+  @Post(':id/inbox/scan')
+  async scan(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return scanProjectInbox(this.dataSource, await this.owned(id, user.id));
   }
 
   @Post()
@@ -45,9 +58,8 @@ export class ProjectsController {
       .andWhere('lower(project.name) = lower(:name)', { name })
       .getOne();
     if (duplicate) throw new ConflictException('Progetto già presente');
-    const modelId = dto.modelId ?? await this.defaultModelId(user.id);
-    if (modelId) await this.ownedModel(modelId, user.id);
-    const project = await this.projects.save({ ownerId: user.id, modelId, name, color: dto.color ?? '#9BE15D' });
+    const project = await this.projects.save({ ownerId: user.id, modelId: null, name, color: dto.color ?? '#9BE15D' });
+    await ensureProjectFolders(project);
     await this.audit.record(user.id, 'PROJECT_CREATED', 'project', project.id);
     return project;
   }
@@ -58,31 +70,32 @@ export class ProjectsController {
     const previousFolder = projectFolderName(project);
     if (dto.name !== undefined) project.name = dto.name.trim();
     if (dto.color !== undefined) project.color = dto.color;
-    if (dto.modelId !== undefined) {
-      await this.ownedModel(dto.modelId, user.id);
-      project.modelId = dto.modelId;
-    }
     const nextFolder = projectFolderName(project);
-    const projectUploads = previousFolder === nextFolder
-      ? []
-      : await this.uploads.find({ where: { ownerId: user.id, projectId: id } });
     let folderMoved = false;
-    if (projectUploads.length) {
-      try {
-        await fs.rename(path.join(uploadDir, previousFolder), path.join(uploadDir, nextFolder));
-        folderMoved = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }
     let saved: ProjectEntity;
     try {
       saved = await this.dataSource.transaction(async (manager) => {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [project.id]);
+        const current = await manager.findOneByOrFail(ProjectEntity, { id: project.id, ownerId: user.id });
+        if (projectFolderName(current) !== previousFolder) throw new ConflictException('Progetto modificato: aggiorna e riprova.');
+        const projectUploads = previousFolder === nextFolder ? [] : await manager.getRepository(UploadEntity)
+          .createQueryBuilder('upload').where('upload.project_id = :id', { id }).setLock('pessimistic_write').getMany();
+        if (previousFolder !== nextFolder) {
+          if (projectUploads.some((upload) => ['UPLOADED', 'PROCESSING'].includes(upload.status))) {
+            throw new BadRequestException('Attendi la fine dell’OCR prima di rinominare il progetto.');
+          }
+          try {
+            await fs.rename(path.join(uploadDir, previousFolder), path.join(uploadDir, nextFolder));
+            folderMoved = true;
+          } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        }
         const updated = await manager.save(ProjectEntity, project);
         if (folderMoved) {
           for (const upload of projectUploads) {
-            const fileName = path.posix.basename(upload.storageKey.replace(/\\/g, '/'));
-            await manager.update(UploadEntity, upload.id, { storageKey: `${nextFolder}/${fileName}` });
+            const key = upload.storageKey.replace(/\\/g, '/');
+            if (key.startsWith(previousFolder + '/')) {
+              await manager.update(UploadEntity, upload.id, { storageKey: nextFolder + key.slice(previousFolder.length) });
+            }
           }
         }
         return updated;
@@ -92,6 +105,7 @@ export class ProjectsController {
       throw error;
     }
     await this.audit.record(user.id, 'PROJECT_UPDATED', 'project', id, { fields: Object.keys(dto) });
+    await ensureProjectFolders(saved);
     return saved;
   }
 
