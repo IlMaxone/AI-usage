@@ -17,3 +17,8 @@ projects/*
 !projects/README.md
 !projects/demo/
 !projects/demo/**
+
+# Standalone legacy HTML OCR: only invented demo data may be versioned.
+html-ocr/projects/*
+!html-ocr/projects/demo/
+!html-ocr/projects/demo/**

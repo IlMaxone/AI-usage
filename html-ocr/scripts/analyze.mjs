@@ -132,8 +132,15 @@ const projectDir = path.resolve(projectsDir, projectName);
 if (!projectDir.startsWith(projectsDir + path.sep)) {
   throw new Error('Percorso progetto non consentito.');
 }
-const toProcessDir = path.join(projectDir, 'to-process-img');
-const processedDir = path.join(projectDir, 'processed-images');
+// Only photos remain outside this standalone secondary tool.
+// Data, reports, caches and dependencies belong exclusively to html-ocr/.
+const imageProjectsDir = path.resolve(root, '..', 'projects');
+const imageProjectDir = path.resolve(imageProjectsDir, projectName);
+if (!imageProjectDir.startsWith(imageProjectsDir + path.sep)) {
+  throw new Error('Percorso immagini non consentito.');
+}
+const toProcessDir = path.join(imageProjectDir, 'to-process-img');
+const processedDir = path.join(imageProjectDir, 'processed-images');
 const historicalDir = path.join(projectDir, 'historical-data');
 const internetDir = path.join(projectDir, 'internet-data');
 const rawInternetDir = path.join(internetDir, 'raw');
@@ -1406,6 +1413,7 @@ async function archiveImage(imagePath, imageName, imageHash) {
 }
 
 async function main() {
+  console.log('HTML OCR secondario: dati e report in html-ocr/projects; foto in projects. Nessuna sincronizzazione con l’app Docker.');
   await ensureDirectories();
   if (recordExtraCredits) {
     await recordExtraCreditPurchase();

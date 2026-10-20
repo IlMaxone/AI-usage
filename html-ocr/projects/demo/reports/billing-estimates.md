@@ -1,6 +1,6 @@
 # Consumi calibrati sulla fatturazione
 
-Generato il: 2026-09-03T12:37:32.329Z
+Generato il: 2026-10-20T10:48:44.826Z
 
 Questa è la stima primaria. Crediti e valore EUR derivano dalla calibrazione
 dichiarata; i token equivalenti usano in aggiunta i rapporti crediti per milione

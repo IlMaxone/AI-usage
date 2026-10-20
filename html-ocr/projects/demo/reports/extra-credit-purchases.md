@@ -1,6 +1,6 @@
 # Crediti extra acquistati e spesi
 
-Generato il: 2026-09-03T12:37:32.327Z
+Generato il: 2026-10-20T10:48:44.824Z
 
 Questi dati sono dichiarati manualmente dall'utente e restano separati dalle
 stime derivate dagli screenshot. Per regola, ogni credito acquistato viene

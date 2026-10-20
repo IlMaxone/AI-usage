@@ -1,6 +1,6 @@
 # Calibrazione di fatturazione
 
-Generato il: 2026-09-03T12:37:32.327Z
+Generato il: 2026-10-20T10:48:44.825Z
 
 Origine: dati dichiarati dall'utente. Osservazioni e risultati derivati
 rimangono distinti.

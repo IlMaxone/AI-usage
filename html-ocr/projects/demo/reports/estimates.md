@@ -1,6 +1,6 @@
 # Stime secondarie dai listini online
 
-Generato il: 2026-09-03T12:37:32.330Z
+Generato il: 2026-10-20T10:48:44.829Z
 
 Questo è il metodo di confronto secondario e non la stima principale. Le stime
 non sono misure di token realmente consumati. La capacità della finestra

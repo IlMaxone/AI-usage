@@ -7,6 +7,13 @@ Non sono presenti screenshot, account, consumi, prezzi o tassi reali.
 Anche l'acquisto di crediti extra mostrato nei report è inventato.
 La calibrazione di fatturazione demo e tutti i relativi risultati sono inventati.
 
-Per rigenerare i report:
+Per rigenerare i report dalla cartella `html-ocr`:
 
     npm run demo:build
+
+Oppure, dalla radice del repository:
+
+    npm --prefix html-ocr run demo:build
+
+La dashboard è ora in `html-ocr/projects/demo/reports/dashboard.html`.
+Le cartelle foto dimostrative restano in `projects/demo/` alla radice.
