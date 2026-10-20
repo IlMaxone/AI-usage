@@ -2,17 +2,17 @@ import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
-import { concatMap, forkJoin, from, map, of, switchMap, tap, toArray } from 'rxjs';
+import { concatMap, forkJoin, from, map, of, Subscription, switchMap, tap, toArray } from 'rxjs';
 import { ApiService, AuthService } from './services';
-import { AiModel, CostAnalysis, Dashboard, GalleryUpload, Project, Reading, UsageRecord } from './types';
+import { AiModel, CostAnalysis, Dashboard, GalleryUpload, Project, Reading, UsageRecord, OcrFailureNotification } from './types';
+import { pairUploadFiles } from './pair-files';
 
-type Tab = 'overview' | 'analytics' | 'projects' | 'insert' | 'records' | 'analysis' | 'models';
-type AnalysisImage = GalleryUpload & { url: string };
-type FileSlot = 'single';
+type Tab = 'overview' | 'analytics' | 'projects' | 'insert' | 'records' | 'models' | 'profile';
+type ArchiveImage = GalleryUpload & { url: string };
+type FileSlot = 'single' | 'pairs';
 type SelectedFileBatch = { count: number; name: string; size: string };
-type AnalysisImageGroup = {
-  key: string; recordId: string | null; mode: 'CONSTANT' | 'SEGMENT'; images: AnalysisImage[]; capturedAt: string | null;
-};
+type RecordImages = { loading: boolean; images: ArchiveImage[]; error: string };
+type ModelGroup = { key: string; provider: string; name: string; variants: AiModel[] };
 type ProjectCostSummary = {
   project: Project;
   modelNames: string;
@@ -48,9 +48,20 @@ export class AppComponent implements OnDestroy {
   readonly message = signal('');
   readonly error = signal('');
   readonly dashboard = signal<Dashboard | null>(null);
+  readonly ocrFailures = signal<OcrFailureNotification[]>([]);
   readonly projects = signal<Project[]>([]);
   readonly records = signal<UsageRecord[]>([]);
   readonly models = signal<AiModel[]>([]);
+  readonly selectedModelVariants = signal<Record<string, string>>({});
+  readonly modelGroups = computed<ModelGroup[]>(() => {
+    const groups = new Map<string, ModelGroup>();
+    for (const model of this.models()) {
+      const key = model.provider.toLowerCase() + ':' + model.name.toLowerCase();
+      const group = groups.get(key) ?? { key, provider: model.provider, name: model.name, variants: [] };
+      group.variants.push(model); groups.set(key, group);
+    }
+    return [...groups.values()];
+  });
   readonly costAnalysis = signal<CostAnalysis | null>(null);
   readonly costAnalysisLoading = signal(false);
   readonly explorationEnabled = signal(false);
@@ -64,7 +75,9 @@ export class AppComponent implements OnDestroy {
   readonly editingProjectId = signal<string | null>(null);
 
   readonly correctionTarget = signal<{ recordId: string; uploadId: string; label: string } | null>(null);
-  readonly selectedFiles = signal<Record<FileSlot, SelectedFileBatch | null>>({ single: null });
+  readonly selectedFiles = signal<Record<FileSlot, SelectedFileBatch | null>>({ single: null, pairs: null });
+  readonly pairSource = signal<'FILES' | 'FOLDER'>('FILES');
+  readonly pairPlan = signal<ReturnType<typeof pairUploadFiles<File>>>({ pairs: [], issues: [] });
   readonly uploadFeedback = signal('');
   readonly pickerBusy = signal(false);
   readonly inboxFiles = signal<string[]>([]);
@@ -74,44 +87,16 @@ export class AppComponent implements OnDestroy {
     return project?.folder ? `${project.folder}/to-process` : '';
   });
   readonly inboxProjectId = signal('');
-  readonly analysisImages = signal<AnalysisImage[]>([]);
-  readonly analysisLoading = signal(false);
-  readonly analysisProjectId = signal('');
-  readonly selectedAnalysisRecordId = signal<string | null>(null);
-  readonly selectedAnalysisImage = signal<AnalysisImage | null>(null);
-  readonly visibleAnalysisImages = computed(() => this.analysisImages());
+  readonly expandedRecordIds = signal<ReadonlySet<string>>(new Set());
+  readonly recordImages = signal<Record<string, RecordImages>>({});
+  readonly selectedImage = signal<ArchiveImage | null>(null);
+  private readonly imageRequests = new Map<string, Subscription>();
   readonly recordProjects = computed(() => {
     const byId = new Map(this.projects().map((project) => [project.id, project]));
     for (const record of this.records()) if (record.project) byId.set(record.project.id, record.project);
     return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name, 'it'));
   });
   readonly visibleRecords = computed(() => this.records().filter((record) => record.projectId === this.recordsProjectId()));
-  readonly analysisImageGroups = computed<AnalysisImageGroup[]>(() => {
-    const groups = new Map<string, AnalysisImageGroup>();
-    for (const image of this.analysisImages()) {
-      const key = image.recordId ?? `unlinked-${image.id}`;
-      const existing = groups.get(key) ?? {
-        key,
-        recordId: image.recordId,
-        mode: image.role === 'SINGLE' ? 'CONSTANT' : 'SEGMENT',
-        images: [],
-        capturedAt: image.capturedAt ?? image.createdAt,
-      };
-      existing.images.push(image);
-      if (new Date(image.capturedAt ?? image.createdAt).getTime() > new Date(existing.capturedAt ?? 0).getTime()) {
-        existing.capturedAt = image.capturedAt ?? image.createdAt;
-      }
-      groups.set(key, existing);
-    }
-    const roleOrder = { START: 0, END: 1, SINGLE: 0 } as const;
-    for (const group of groups.values()) group.images.sort((left, right) => roleOrder[left.role] - roleOrder[right.role]);
-    const target = this.selectedAnalysisRecordId();
-    return [...groups.values()].sort((left, right) => {
-      if (left.recordId === target) return -1;
-      if (right.recordId === target) return 1;
-      return new Date(right.capturedAt ?? 0).getTime() - new Date(left.capturedAt ?? 0).getTime();
-    });
-  });
   readonly activeValidations = computed(() => this.records().filter((item) => item.status === 'VALIDATING').length);
   readonly retryingRecordIds = signal<ReadonlySet<string>>(new Set());
   readonly projectColors = [
@@ -130,7 +115,7 @@ export class AppComponent implements OnDestroy {
         : items.reduce((total, item) => total + (item.estimatedUsageMinutes ?? 0), 0);
       return {
         project,
-        modelNames: [...new Set(items.flatMap((item) => item.sourceModel ? [item.sourceModel.name + ' · ' + item.sourceModel.reasoning] : []))].join(', ') || 'In attesa del tag OCR',
+        modelNames: [...new Set(items.flatMap((item) => item.sourceModel ? [item.sourceModel.name + ' · ' + this.reasoningLabel(item.sourceModel.reasoning)] : []))].join(', ') || 'In attesa del tag OCR',
         unpricedRecords: analysis?.summary.unpricedRecords ?? 0,
         estimatedMinutes,
         estimatedCost: items.reduce((total, item) => total + (item.estimatedCost ?? 0), 0),
@@ -200,22 +185,19 @@ export class AppComponent implements OnDestroy {
     if (this.auth.user()) this.refresh();
     this.poller = setInterval(() => {
       if (!this.auth.user()) return;
+      this.refreshOcrFailures();
       const pendingTags = this.records().some((record) => [record.single, record.start, record.end].some((reading) => reading?.upload && ['VALIDATED', 'PROCESSING'].includes(reading.upload.status) && !reading.upload.modelId));
       if (this.activeValidations() || pendingTags || ['insert', 'records'].includes(this.tab())) this.refreshRecords();
       if (this.tab() === 'insert' && this.recordForm.controls.mode.value === 'SEGMENT') this.refreshInbox();
     }, 4000);
   }
-  ngOnDestroy() { clearInterval(this.poller); this.releaseAnalysisImages(); }
+  ngOnDestroy() { clearInterval(this.poller); this.releaseAllRecordImages(); }
   setTab(tab: Tab) {
+    if (tab !== 'records') this.releaseAllRecordImages();
     if (tab !== 'analytics') { this.explorationEnabled.set(false); this.costModelId.set(''); this.costAnalysis.set(null); this.costRequest++; }
     this.tab.set(tab); this.clearFeedback();
     if (tab === 'records') {
       this.recordsProjectId.set(this.recordsProjectId() || this.recordProjects()[0]?.id || '');
-    }
-    if (tab === 'analysis') {
-      this.selectedAnalysisRecordId.set(null);
-      this.analysisProjectId.set(this.analysisProjectId() || this.recordProjects()[0]?.id || '');
-      this.loadAnalysisImages();
     }
     if (tab === 'analytics') this.loadCostAnalysis();
     if (tab === 'insert') this.refreshInbox();
@@ -230,15 +212,16 @@ export class AppComponent implements OnDestroy {
   }
   logout() {
     this.explorationEnabled.set(false); this.costModelId.set(''); this.costRequest++;
-    this.releaseAnalysisImages(); this.auth.logout(); this.dashboard.set(null);
+    this.releaseAllRecordImages(); this.auth.logout(); this.dashboard.set(null);
     this.projects.set([]); this.records.set([]); this.models.set([]); this.costAnalysis.set(null);
     this.overviewProjectAnalyses.set(new Map());
-    this.recordsProjectId.set(''); this.analysisProjectId.set(''); this.selectedAnalysisRecordId.set(null);
+    this.recordsProjectId.set(''); this.clearSelectedFiles(); this.ocrFailures.set([]);
   }
   refresh(preserveFeedback = false) {
     this.loading.set(true); if (!preserveFeedback) this.clearFeedback();
-    forkJoin({ dashboard: this.api.dashboard(), projects: this.api.projects(), records: this.api.records(), models: this.api.models(), window: this.api.windowPricing() }).subscribe({
-      next: ({ dashboard, projects, records, models, window }) => {
+    forkJoin({ dashboard: this.api.dashboard(), projects: this.api.projects(), records: this.api.records(), models: this.api.models(), window: this.api.windowPricing(), failures: this.api.ocrFailures() }).subscribe({
+      next: ({ dashboard, projects, records, models, window, failures }) => {
+        this.ocrFailures.set(failures);
         this.fixedWindow.set(window);
         this.dashboard.set(dashboard); this.projects.set(projects); this.records.set(records); this.models.set(models);
         this.applyDefaults(projects, models); this.loading.set(false);
@@ -279,11 +262,13 @@ export class AppComponent implements OnDestroy {
   }
 
   chooseFile(slot: FileSlot, event: Event) {
+    this.uploadFeedback.set('');
     const input = event.target as HTMLInputElement;
     const files = Array.from(input.files ?? []);
     this.fileInputs[slot] = input;
-    if (files.length > maximumBatchSize) {
-      this.error.set(`Puoi caricare al massimo ${maximumBatchSize} immagini per selezione.`);
+    const maximumFiles = slot === 'pairs' ? maximumBatchSize * 2 : maximumBatchSize;
+    if (files.length > maximumFiles) {
+      this.error.set(`Puoi caricare al massimo ${maximumFiles} immagini per selezione.`);
       input.value = ''; this.setSlotFiles(slot, []); return;
     }
     if (files.some((file) => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type))) {
@@ -304,7 +289,7 @@ export class AppComponent implements OnDestroy {
         size: `${(totalBytes / 1_048_576).toFixed(2)} MB totali`,
       } : null,
     }));
-    this.uploadFeedback.set(files.length ? `${files.length} ${files.length === 1 ? 'immagine selezionata' : 'immagini selezionate'} per letture separate.` : '');
+    this.uploadFeedback.set(files.length ? slot === 'pairs' ? `${this.pairPlan().pairs.length} coppie complete selezionate.` : `${files.length} ${files.length === 1 ? 'immagine selezionata' : 'immagini selezionate'} per letture separate.` : '');
     this.error.set('');
   }
   refreshInbox() {
@@ -346,21 +331,25 @@ export class AppComponent implements OnDestroy {
     });
   }
   batchReady() {
-    return Boolean(this.selectedFiles().single?.count);
+    return this.recordForm.controls.mode.value === 'CONSTANT' ? Boolean(this.selectedFiles().single?.count)
+      : this.pairPlan().pairs.length > 0 && !this.pairPlan().issues.length;
   }
   plannedBatchCount() {
-    return this.selectedFiles().single?.count ?? 0;
+    return this.recordForm.controls.mode.value === 'CONSTANT' ? this.selectedFiles().single?.count ?? 0 : this.pairPlan().pairs.length;
   }
+  changeUploadMode() { this.clearSelectedFiles(); this.uploadFeedback.set(''); this.clearFeedback(); this.refreshInbox(); }
+  changePairSource(source: 'FILES' | 'FOLDER') { this.pairSource.set(source); this.changeUploadMode(); }
   startValidation() {
-    if (this.recordForm.invalid) return;
+    if (this.recordForm.invalid || this.loading()) return;
     const value = this.recordForm.getRawValue();
-    if (value.mode === 'SEGMENT') { this.scanProjectFolder(); return; }
-    if (!this.singleFiles.length) { this.error.set('Seleziona almeno uno screenshot della rilevazione.'); return; }
-    const batchCount = this.singleFiles.length;
+    if (value.mode === 'SEGMENT' && this.pairSource() === 'FOLDER') { this.scanProjectFolder(); return; }
+    if (!this.batchReady()) { this.error.set(value.mode === 'CONSTANT' ? 'Seleziona almeno uno screenshot.' : 'Seleziona coppie A/B complete e senza nomi ambigui.'); return; }
+    const batchCount = this.plannedBatchCount();
     const body = new FormData();
     body.append('projectId', value.projectId); body.append('mode', value.mode);
     if (value.note) body.append('note', value.note);
-    this.singleFiles.forEach((file) => body.append('single', file));
+    if (value.mode === 'CONSTANT') this.singleFiles.forEach((file) => body.append('single', file));
+    else for (const pair of this.pairPlan().pairs) { body.append('start', pair.start); body.append('end', pair.end); }
     this.loading.set(true); this.clearFeedback();
     this.uploadFeedback.set(`Caricamento di ${batchCount} ${batchCount === 1 ? 'batch' : 'batch separati'}…`);
     this.api.createRecordBatch(body).pipe(
@@ -378,11 +367,14 @@ export class AppComponent implements OnDestroy {
     });
   }
   private setSlotFiles(slot: FileSlot, files: File[]) {
-    this.singleFiles = files;
+    if (slot === 'single') this.singleFiles = files;
+    else this.pairPlan.set(pairUploadFiles(files));
+    if (!files.length) this.selectedFiles.update((current) => ({ ...current, [slot]: null }));
   }
   private clearSelectedFiles() {
     this.singleFiles = [];
-    this.selectedFiles.set({ single: null });
+    this.selectedFiles.set({ single: null, pairs: null });
+    this.pairPlan.set({ pairs: [], issues: [] });
     for (const input of Object.values(this.fileInputs)) if (input) input.value = '';
   }
   retryValidation(id: string) {
@@ -404,7 +396,7 @@ export class AppComponent implements OnDestroy {
   deleteRecord(id: string) {
     if (!window.confirm('Eliminare la rilevazione dall’app? Gli screenshot saranno conservati nella cartella deleted del progetto e potranno essere recuperati.')) return;
     this.api.deleteRecord(id).subscribe({
-      next: () => { this.succeed('Rilevazione eliminata. Screenshot conservati in deleted nella cartella del progetto.'); this.refresh(true); },
+      next: () => { this.releaseRecordImages(id); this.expandedRecordIds.update((ids) => new Set([...ids].filter((item) => item !== id))); this.succeed('Rilevazione eliminata. Screenshot conservati in deleted nella cartella del progetto.'); this.refresh(true); },
       error: (error) => this.fail(error),
     });
   }
@@ -509,42 +501,43 @@ export class AppComponent implements OnDestroy {
     return ({ SINGLE: 'Screenshot singolo', START: 'Inizio segmento', END: 'Fine segmento' } as const)[role];
   }
   selectRecordsProject(projectId: string) {
-    this.recordsProjectId.set(projectId); this.correctionTarget.set(null);
+    this.releaseAllRecordImages(); this.recordsProjectId.set(projectId); this.correctionTarget.set(null);
   }
-  openRecordImages(record: UsageRecord) {
-    this.analysisProjectId.set(record.projectId);
-    this.selectedAnalysisRecordId.set(record.id);
-    this.selectedAnalysisImage.set(null);
-    this.tab.set('analysis'); this.clearFeedback(); this.loadAnalysisImages();
-  }
-  loadAnalysisImages() {
-    const projectId = this.analysisProjectId();
-    if (!projectId) { this.releaseAnalysisImages(); this.analysisLoading.set(false); return; }
-    this.analysisLoading.set(true); this.selectedAnalysisImage.set(null);
-    this.api.gallery(projectId).pipe(
-      switchMap((items) => items.length
-        ? forkJoin(items.map((item) => this.api.uploadImage(item.id).pipe(
-            map((blob) => ({ ...item, url: URL.createObjectURL(blob) })),
-          )))
-        : of([] as AnalysisImage[])),
+  refreshArchive() { this.releaseAllRecordImages(); this.refresh(); }
+  toggleRecordImages(record: UsageRecord) {
+    if (this.expandedRecordIds().has(record.id)) {
+      this.expandedRecordIds.update((ids) => new Set([...ids].filter((id) => id !== record.id)));
+      this.releaseRecordImages(record.id); return;
+    }
+    this.expandedRecordIds.update((ids) => new Set([...ids, record.id]));
+    this.recordImages.update((state) => ({ ...state, [record.id]: { loading: true, images: [], error: '' } }));
+    const request = this.api.gallery(record.projectId).pipe(
+      map((items) => items.filter((item) => item.recordId === record.id).sort((a, b) => (a.role === 'END' ? 1 : 0) - (b.role === 'END' ? 1 : 0))),
+      switchMap((items) => items.length ? forkJoin(items.map((item) => this.api.uploadImage(item.id).pipe(map((blob) => ({ item, blob }))))) : of([])),
     ).subscribe({
       next: (items) => {
-        this.releaseAnalysisImages(); this.analysisImages.set(items); this.analysisLoading.set(false);
+        if (!this.expandedRecordIds().has(record.id) || this.recordsProjectId() !== record.projectId) return;
+        const images = items.map(({ item, blob }) => ({ ...item, url: URL.createObjectURL(blob) }));
+        this.recordImages.update((state) => ({ ...state, [record.id]: { loading: false, images, error: '' } }));
       },
-      error: (error) => { this.analysisLoading.set(false); this.fail(error); },
+      error: () => this.recordImages.update((state) => ({ ...state, [record.id]: { loading: false, images: [], error: 'Screenshot non disponibili. Chiudi e riapri per riprovare.' } })),
     });
+    this.imageRequests.set(record.id, request);
   }
-  selectAnalysisProject(projectId: string) {
-    this.analysisProjectId.set(projectId); this.selectedAnalysisRecordId.set(null); this.loadAnalysisImages();
+  private releaseRecordImages(id: string) {
+    this.imageRequests.get(id)?.unsubscribe(); this.imageRequests.delete(id);
+    for (const image of this.recordImages()[id]?.images ?? []) URL.revokeObjectURL(image.url);
+    if (this.selectedImage()?.recordId === id) this.selectedImage.set(null);
+    this.recordImages.update((state) => { const copy = { ...state }; delete copy[id]; return copy; });
   }
-  private releaseAnalysisImages() {
-    for (const item of this.analysisImages()) URL.revokeObjectURL(item.url);
-    this.analysisImages.set([]); this.selectedAnalysisImage.set(null);
+  private releaseAllRecordImages() {
+    for (const id of this.imageRequests.keys()) this.releaseRecordImages(id);
+    this.expandedRecordIds.set(new Set()); this.selectedImage.set(null);
   }
   tabTitle() {
     return ({
       overview: 'La scrivania', analytics: 'Analisi usage', projects: 'I progetti', insert: 'Nuova lettura', records: 'Archivio usage',
-      analysis: 'Analisi immagini', models: 'Modelli',
+      models: 'Modelli', profile: 'Profilo',
     } as Record<Tab, string>)[this.tab()];
   }
   private refreshRecords() {
@@ -555,21 +548,32 @@ export class AppComponent implements OnDestroy {
       if (tagsChanged || (wasActive && this.activeValidations() === 0)) this.refresh(true);
     });
   }
+  private refreshOcrFailures() {
+    this.api.ocrFailures().subscribe({ next: (items) => this.ocrFailures.set(items), error: (error: HttpErrorResponse) => { if (error.status === 401) this.logout(); } });
+  }
   private applyDefaults(projects: Project[], models: AiModel[]) {
     const selectedProject = this.recordForm.controls.projectId.value;
     const projectId = projects.some((project) => project.id === selectedProject) ? selectedProject : projects[0]?.id || '';
     this.recordForm.patchValue({ projectId });
     this.inboxProjectId.set(projectId);
     const recordProjectIds = new Set(this.recordProjects().map((project) => project.id));
-    if (!recordProjectIds.has(this.recordsProjectId())) this.recordsProjectId.set(this.recordProjects()[0]?.id || '');
-    if (!recordProjectIds.has(this.analysisProjectId())) this.analysisProjectId.set(projects[0]?.id || '');
+    if (!recordProjectIds.has(this.recordsProjectId())) this.selectRecordsProject(this.recordProjects()[0]?.id || '');
     if (this.explorationEnabled() && !models.some((model) => model.id === this.costModelId())) {
       this.costModelId.set(models.find((item) => item.isDefault)?.id || models[0]?.id || '');
     }
   }
   modelLabel(modelId: string | null | undefined) {
     const model = this.models().find((item) => item.id === modelId);
-    return model ? `${model.provider} · ${model.name} · ${model.reasoning}` : modelId ? 'Modello non disponibile nel CSV' : 'Modello da riconoscere';
+    return model ? `${model.provider} · ${model.name} · ${this.reasoningLabel(model.reasoning)}` : modelId ? 'Modello non disponibile nel CSV' : 'Modello da riconoscere';
+  }
+  reasoningLabel(reasoning: string | null | undefined) {
+    return (reasoning ?? '').replace(/\b(?:flash|fast)\b/gi, '⚡ Fast');
+  }
+  selectedModelVariant(group: ModelGroup) {
+    return group.variants.find((model) => model.id === this.selectedModelVariants()[group.key]) ?? group.variants[0]!;
+  }
+  selectModelVariant(group: ModelGroup, id: string) {
+    if (group.variants.some((model) => model.id === id)) this.selectedModelVariants.update((selected) => ({ ...selected, [group.key]: id }));
   }
   modelWindowDuration(model: AiModel) {
     const minutes = model.pricing.maxTimeWindowMinutes ?? model.pricing.fiveHourWindowCost / model.pricing.costPerMinute;

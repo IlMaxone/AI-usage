@@ -22,6 +22,7 @@ export class UserEntity {
 @Index(['ownerId', 'name'], { unique: true, where: 'deleted_at IS NULL' })
 export class ProjectEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ name: 'storage_folder', type: 'varchar', length: 100, nullable: true }) storageFolder!: string | null;
   @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
   @Column({ name: 'model_id', type: 'uuid', nullable: true }) modelId!: string | null;
   @Column({ type: 'varchar', length: 100 }) name!: string;
@@ -137,6 +138,8 @@ export type UploadStatus = 'DRAFT' | 'UPLOADED' | 'PROCESSING' | 'VALIDATED' | '
 @Entity('uploads')
 @Index(['ownerId', 'projectId', 'sha256'], { where: 'sha256 IS NOT NULL' })
 export class UploadEntity {
+  @Column({ name: 'pending_ocr', type: 'jsonb', nullable: true }) pendingOcr!: Record<string, unknown> | null;
+  @Column({ name: 'prior_upload', type: 'jsonb', nullable: true }) priorUpload!: Record<string, unknown> | null;
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
   @Column({ name: 'project_id', type: 'uuid' }) projectId!: string;
@@ -239,7 +242,24 @@ export class AuditEventEntity {
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
 }
 
+@Entity('ocr_failure_notifications')
+export class OcrFailureNotificationEntity {
+  @Column({ name: 'storage_key', type: 'varchar', length: 255 }) storageKey!: string;
+  @Column({ name: 'pair_number', type: 'varchar', length: 255, nullable: true }) pairNumber!: string | null;
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" }) files!: string[];
+  @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
+  @Column({ name: 'project_id', type: 'uuid' }) projectId!: string;
+  @Column({ name: 'upload_id', type: 'uuid' }) uploadId!: string;
+  @Column({ name: 'record_id', type: 'uuid', nullable: true }) recordId!: string | null;
+  @Column({ name: 'original_name', type: 'varchar', length: 255 }) originalName!: string;
+  @Column({ type: 'varchar', length: 500 }) reason!: string;
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
+  @Column({ name: 'resolved_at', type: 'timestamptz', nullable: true }) resolvedAt!: Date | null;
+}
+
 export const ENTITIES = [
+  OcrFailureNotificationEntity,
   UserEntity,
   ProjectEntity,
   AiModelEntity,

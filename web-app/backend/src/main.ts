@@ -10,12 +10,16 @@ import { DataSource } from 'typeorm';
 import { migrateProjectStorage } from './inbox';
 import { uploadDir } from './storage';
 import { ModelCatalogService } from './model-catalog';
+import { recoverOcrFailures } from './ocr-failures';
+import { migrateReadableProjectFolders } from './project-folders';
 
 async function bootstrap() {
   await fs.mkdir(uploadDir, { recursive: true });
   const app = await NestFactory.create(AppModule, { bodyParser: true });
   await app.get(ModelCatalogService).loadAndSync();
+  await migrateReadableProjectFolders(app.get(DataSource));
   await migrateProjectStorage(app.get(DataSource));
+  await recoverOcrFailures(app.get(DataSource));
   app.setGlobalPrefix('api');
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
   app.enableCors({ origin: (process.env.CORS_ORIGIN ?? 'http://localhost:4200').split(','), credentials: false });

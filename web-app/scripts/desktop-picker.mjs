@@ -86,7 +86,7 @@ const server = http.createServer(async (request, response) => {
     const project = projects.find((item) => item.id === route[1]);
     if (!project) { response.writeHead(404).end('{}'); return; }
     const folder = project.folder?.replace(/^projects\//, '');
-    if (!folder || !/^[a-z0-9-]+--[0-9a-f]{8}$/.test(folder)) throw new Error('Cartella progetto non valida.');
+    if (!folder || !/^[a-z0-9][a-z0-9-]{0,99}$/i.test(folder)) throw new Error('Cartella progetto non valida.');
     const inbox = path.join(projectsRoot, folder, 'to-process');
     await fs.mkdir(inbox, { recursive: true });
     const realRoot = await fs.realpath(projectsRoot);

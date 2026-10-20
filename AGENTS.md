@@ -36,8 +36,11 @@ Docker o avvii automatici che colleghino i due motori.
 
 - Prima di archiviare un'immagine, richiedere l'accordo di almeno due passaggi
   OCR sui valori di utilizzo e reset.
-- Se i controlli non concordano, lasciare l'immagine in ingresso e richiedere
-  verifica manuale.
+- Nel motore HTML OCR, se i controlli non concordano, lasciare l'immagine in
+  ingresso e richiedere verifica manuale. Nell'app web spostare i tentativi
+  falliti in `unprocessed` e conservare un alert nel profilo. Le coppie mai
+  convalidate non restano nell'archivio; una rilettura fallita conserva l'ultima
+  coppia valida. Aggiornare A/B insieme solo dopo la convalida completa.
 - Non registrare snapshot Internet quando nessuna nuova immagine supera la
   validazione.
 - Conservare URL, timestamp e hash delle fonti esterne utilizzate.

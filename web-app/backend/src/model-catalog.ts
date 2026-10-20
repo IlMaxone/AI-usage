@@ -12,6 +12,7 @@ export interface CatalogRow {
 }
 const headers = ['key', 'provider', 'name', 'reasoning', 'currency', 'five_hour_window_cost', 'cost_per_minute', 'max_time_window_minutes', 'available'];
 const identity = (value: string) => value.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '');
+const reasoningLabelIdentity = (value: string) => identity(value.replace(/\blight\b/gi, 'low').replace(/[\s-]+flash$/i, ' fast'));
 
 function csvRows(text: string): string[][] {
   const rows: string[][] = [];
@@ -48,9 +49,9 @@ export function parseModelCatalog(text: string): CatalogRow[] {
     const fail = (reason: string): never => { throw new Error(`MODEL_CATALOG_ROW_${index + 2}: ${reason}`); };
     if (row.length !== headers.length) fail('numero di colonne errato');
     const [key, provider, name, reasoning, currency, window, minute, maxTime, available] = row as [string, string, string, string, string, string, string, string, string];
-    if (!/^[a-z0-9][a-z0-9.-]{0,99}$/.test(key) || keys.has(key)) fail('key non valida o duplicata');
+    if (!/^[a-z0-9][a-z0-9. -]{0,99}$/.test(key) || keys.has(key)) fail('key non valida o duplicata');
     if (!provider || provider.length > 80 || !name || name.length > 120 || !reasoning || reasoning.length > 80 || [provider, name, reasoning].some((value) => /[\r\n\x00]/.test(value))) fail('identità del modello non valida');
-    const label = identity(name) + ':' + identity(reasoning);
+    const label = identity(name) + ':' + reasoningLabelIdentity(reasoning);
     if (labels.has(label)) fail('nome e reasoning ambigui');
     const number = (value: string) => /^\d+(?:[.,]\d+)?$/.test(value) ? Number(value.replace(',', '.')) : NaN;
     const fiveHourWindowCost = number(window), costPerMinute = number(minute);

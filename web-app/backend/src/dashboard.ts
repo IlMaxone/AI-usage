@@ -15,6 +15,7 @@ import {
 } from './entities';
 import { computeRecordUsage } from './records';
 import { currentObservations } from './observations';
+import { allocateWindowUsage, groupByWindow, projectUsageShares } from './usage-allocation';
 
 class ExtraCreditsDto {
   @IsInt() @Min(1) credits!: number;
@@ -38,7 +39,7 @@ export class DashboardController {
   async summary(@CurrentUser() user: AuthUser) {
     const [records, projects, purchases] = await Promise.all([
       this.records.find({ where: { ownerId: user.id }, order: { createdAt: 'DESC' } }),
-      this.projects.find({ where: { ownerId: user.id }, order: { name: 'ASC' } }),
+      this.projects.find({ where: { ownerId: user.id }, withDeleted: true, order: { name: 'ASC' } }),
       this.purchases.find({ where: { ownerId: user.id }, order: { purchasedAt: 'DESC' } }),
     ]);
     const uploadIds = records
@@ -88,6 +89,7 @@ export class DashboardController {
           .filter(Boolean)
           .map((upload) => ({ id: upload!.id, role: upload!.role, status: upload!.status })),
         usage,
+        fiveHourResetsAt: observed?.fiveHourResetsAt ?? null,
         observedUsage: observed ? {
           fiveHourUsedPct: Number(observed.fiveHourUsedPct),
           weeklyUsedPct: Number(observed.weeklyUsedPct),
@@ -100,21 +102,34 @@ export class DashboardController {
     const extraCredits = purchases.reduce((sum, item) => sum + Number(item.credits), 0);
     const extraPaidEur = purchases.reduce((sum, item) => sum + Number(item.paidEur), 0);
     const measured = items.filter((item) => item.usage.usedPct !== null);
+    const groups = groupByWindow(measured);
+    const attributed = new Map<string, number>();
+    for (const group of groups) {
+      const allocations = allocateWindowUsage(group.records.map((item) => ({
+        usedPct: item.usage.usedPct ?? 0, endingUsedPct: item.observedUsage?.fiveHourUsedPct ?? 0,
+        mode: item.mode, capturedAt: item.capturedAt ?? item.createdAt,
+      }))).allocations;
+      group.records.forEach((item, index) => attributed.set(item.id, allocations[index]!));
+    }
+    const usedPctSum = [...attributed.values()].reduce((sum, value) => sum + value, 0);
+    const projectTotals = projects.map((project) => items.filter((item) => item.project?.id === project.id).reduce((sum, item) => sum + (attributed.get(item.id) ?? 0), 0));
+    const shares = projectUsageShares(projectTotals);
     return {
       metrics: {
         records: records.length,
         measuredRecords: measured.length,
         segments: items.filter((item) => item.mode === 'SEGMENT').length,
-        usedPctSum: measured.reduce((sum, item) => sum + (item.usage.usedPct ?? 0), 0),
+        usedPctSum,
+        equivalentWindows: usedPctSum / 100,
+        windowCount: groups.length,
         extraCreditsSpent: extraCredits,
         extraPaidEur: Math.round(extraPaidEur * 100) / 100,
       },
-      projects: projects.map((project) => ({
+      projects: projects.map((project, index) => ({
         ...project,
         recordCount: items.filter((item) => item.project?.id === project.id).length,
-        usedPctSum: items
-          .filter((item) => item.project?.id === project.id)
-          .reduce((sum, item) => sum + (item.usage.usedPct ?? 0), 0),
+        usedPctSum: projectTotals[index]!,
+        usageSharePct: shares[index]!,
       })),
       recentRecords: items
         .slice()

@@ -88,12 +88,6 @@ export class AuthController {
         passwordHash,
       });
       await this.catalog.syncOwner(manager, created.id);
-      await manager.save(ProjectEntity, {
-        ownerId: created.id,
-        modelId: null,
-        name: 'Generale',
-        color: '#9BE15D',
-      });
       await manager.insert(AuditEventEntity, {
         ownerId: created.id,
         action: 'USER_REGISTERED',

@@ -15,7 +15,7 @@ Gli script di backup usano nomi di database e utente configurati localmente.
 
 Per un insieme coerente di SQL e file, fermare temporaneamente le scritture di
 API e worker, creare il dump lasciando `db` attivo e copiare le cartelle foto
-`projects/<nome>--<id>/`, incluso `deleted`. Conservare anche l'eventuale vecchio
+`projects/<nome>/`, incluso `deleted`. Conservare anche l'eventuale vecchio
 archivio `web-app/storage/uploads/`, il CSV e la configurazione locale in un
 luogo privato. I dati di `html-ocr` hanno un [backup separato](../../html-ocr/docs/migrazione-privacy.md).
 

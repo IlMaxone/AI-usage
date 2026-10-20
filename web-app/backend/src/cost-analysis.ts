@@ -16,17 +16,18 @@ import { computeRecordUsage, SnapshotInput } from './records';
 import { FIXED_WINDOW } from './fixed-window';
 import { currentObservations } from './observations';
 
-const WINDOW_ALIGNMENT_TOLERANCE_MS = 60 * 60_000;
+import { allocateWindowUsage, groupByWindow } from './usage-allocation';
+export { allocateWindowUsage } from './usage-allocation';
 
 export function calculateModelCost(usedPct: number, pricing: ModelPricing) {
   const attributedUsedPct = Math.max(0, Number(usedPct));
   const windowCostAt100 = FIXED_WINDOW.fiveHourWindowCost;
   const costPerMinute = Math.max(0, Number(pricing.costPerMinute));
   const estimatedCost = (attributedUsedPct / 100) * windowCostAt100;
-  // The explicit CSV duration remains authoritative when minute prices are rounded.
-  // Keep the inverse-price fallback only for historical pricing without this field.
-  const usageMinutesAt100 = pricing.maxTimeWindowMinutes ?? (costPerMinute > 0 ? windowCostAt100 / costPerMinute : null);
-  const estimatedUsageMinutes = usageMinutesAt100 === null ? null : (attributedUsedPct / 100) * usageMinutesAt100;
+  // Estimated time is driven by attributed usage and the original model's rate.
+  // The CSV duration remains a separately declared limit displayed in the catalog.
+  const usageMinutesAt100 = costPerMinute > 0 ? windowCostAt100 / costPerMinute : null;
+  const estimatedUsageMinutes = costPerMinute > 0 ? estimatedCost / costPerMinute : null;
   return {
     attributedUsedPct: round(attributedUsedPct, 4),
     windowCostAt100: round(windowCostAt100, 14),
@@ -48,41 +49,6 @@ export function calculateExploredCost(usedPct: number, source: ModelPricing, tar
 function round(value: number, digits: number) {
   const factor = 10 ** digits;
   return Math.round((value + Number.EPSILON) * factor) / factor;
-}
-
-export interface WindowUsageInput {
-  usedPct: number;
-  endingUsedPct: number;
-  mode: 'CONSTANT' | 'SEGMENT';
-  capturedAt: Date | string;
-}
-
-export function allocateWindowUsage(values: WindowUsageInput[]) {
-  const allocations = Array<number>(values.length).fill(0);
-  const ordered = values
-    .map((value, index) => ({ ...value, index }))
-    .sort((left, right) => new Date(left.capturedAt).getTime() - new Date(right.capturedAt).getTime());
-  let previousCumulativePct: number | null = null;
-  for (const item of ordered) {
-    const usedPct = Math.min(100, Math.max(0, Number(item.usedPct)));
-    const endingUsedPct = Math.min(100, Math.max(0, Number(item.endingUsedPct)));
-    if (item.mode === 'SEGMENT') {
-      allocations[item.index] = usedPct;
-    } else {
-      allocations[item.index] = previousCumulativePct === null || endingUsedPct < previousCumulativePct
-        ? endingUsedPct
-        : endingUsedPct - previousCumulativePct;
-    }
-    previousCumulativePct = endingUsedPct;
-  }
-  const normalizedAllocations = allocations.map((value) => round(Math.max(0, value), 8));
-  const rawUsedPct = values.reduce((sum, value) => sum + Math.max(0, Number(value.usedPct)), 0);
-  const attributedUsedPct = normalizedAllocations.reduce((sum, value) => sum + value, 0);
-  return {
-    rawUsedPct: round(rawUsedPct, 4),
-    attributedUsedPct: round(attributedUsedPct, 4),
-    allocations: normalizedAllocations,
-  };
 }
 
 @Controller('cost-analysis')
@@ -156,12 +122,7 @@ export class CostAnalysisController {
     });
     // Allocate across every project and model before filtering. Cumulative
     // account usage cannot be counted again when the project or model changes.
-    const groups: Array<{ anchor: number | null; records: typeof base }> = [];
-    for (const item of base) {
-      const time = item.fiveHourResetsAt ? new Date(item.fiveHourResetsAt).getTime() : null;
-      const group = time === null ? undefined : groups.find((group) => group.anchor !== null && Math.abs(group.anchor - time) <= WINDOW_ALIGNMENT_TOLERANCE_MS);
-      if (group) group.records.push(item); else groups.push({ anchor: time, records: [item] });
-    }
+    const groups = groupByWindow(base);
     const items = groups.flatMap((group) => {
       const allocations = allocateWindowUsage(group.records).allocations;
       return group.records.map((item, index) => {

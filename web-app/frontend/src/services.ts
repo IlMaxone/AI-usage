@@ -2,7 +2,7 @@ import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
 import { tap } from 'rxjs';
 import { API_URL } from './api-url';
-import { AiModel, AuthResponse, CostAnalysis, Dashboard, GalleryUpload, Project, UsageRecord, User } from './types';
+import { AiModel, AuthResponse, CostAnalysis, Dashboard, GalleryUpload, Project, UsageRecord, User, OcrFailureNotification } from './types';
 
 const TOKEN_KEY = 'ai-usage-token';
 const USER_KEY = 'ai-usage-user';
@@ -34,6 +34,7 @@ export const authInterceptor: HttpInterceptorFn = (request, next) => {
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
+  ocrFailures() { return this.http.get<OcrFailureNotification[]>(`${API_URL}/notifications/ocr-failures`); }
   private readonly http = inject(HttpClient);
   dashboard() { return this.http.get<Dashboard>(`${API_URL}/dashboard`); }
   projects() { return this.http.get<Project[]>(`${API_URL}/projects`); }

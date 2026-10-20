@@ -12,6 +12,8 @@ import { ProjectInbox1726500000007 } from './migrations/1726500000007-project-in
 import { ImmutableModelTags1726500000008 } from './migrations/1726500000008-immutable-model-tags';
 import { ModelTagJobRecovery1726500000009 } from './migrations/1726500000009-model-tag-job-recovery';
 import { CsvModelCatalog1726500000010 } from './migrations/1726500000010-csv-model-catalog';
+import { OcrFailureNotifications1726500000011 } from './migrations/1726500000011-ocr-failure-notifications';
+import { ReadableProjectFolders1726500000012 } from './migrations/1726500000012-readable-project-folders';
 
 export function databaseOptions(migrationsRun = false) {
   const url = process.env.DATABASE_URL;
@@ -32,6 +34,8 @@ export function databaseOptions(migrationsRun = false) {
       ImmutableModelTags1726500000008,
       ModelTagJobRecovery1726500000009,
       CsvModelCatalog1726500000010,
+      OcrFailureNotifications1726500000011,
+      ReadableProjectFolders1726500000012,
     ],
     migrationsRun,
     synchronize: false,

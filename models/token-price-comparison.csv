@@ -1,0 +1,4 @@
+model,reasoning,api_input_usd_per_1m,api_cached_input_usd_per_1m,api_output_usd_per_1m,relative_model_price,reference_window_eur,estimated_eur_per_min,equivalent_minutes_at_100pct,rate_origin,source_url
+GPT-5.6 Sol,medium,4,0.4,20,1,13.54,0.154,87.90160116448327,user-billed-control,https://developers.openai.com/api/docs/models/gpt-5.6-sol
+GPT-5.6 Sol,light,4,0.4,20,1,13.54,0.1221,110.85848742709234,provisional-benchmark-estimate,https://developers.openai.com/api/docs/models/gpt-5.6-sol
+GPT-6 Astra,light,10,1,50,2.5,13.54,0.3053,44.34339497083694,provisional-benchmark-and-token-price-estimate,https://developers.openai.com/api/docs/models/gpt-6-astra

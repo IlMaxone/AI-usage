@@ -59,7 +59,12 @@ export async function importRecord(
       const byName = await manager.getRepository(UploadEntity).createQueryBuilder('u')
         .where('u.owner_id = :owner AND u.project_id = :project', { owner: project.ownerId, project: project.id })
         .andWhere('lower(u.original_name) = lower(:name)', { name: image.originalName }).getMany();
-      const exact = byName.filter((u) => u.role === image.role);
+      let exact = byName.filter((u) => u.role === image.role);
+      const pair = image.role === 'SINGLE' ? null : pairIdentity(image.originalName);
+      if (pair) {
+        const candidates = await manager.findBy(UploadEntity, { ownerId: project.ownerId, projectId: project.id, role: image.role });
+        exact = candidates.filter((candidate) => pairIdentity(candidate.originalName)?.number === pair.number);
+      }
       const hashes = await manager.findBy(UploadEntity, { ownerId: project.ownerId, projectId: project.id, sha256: image.hash });
       const match = exact[0] ?? hashes.find((u) => u.role === image.role) ?? null;
       if (exact.length > 1 || (!match && hashes.length)) throw new BadRequestException('Immagine già associata a un ruolo diverso: verifica il progetto e la coppia.');
@@ -92,7 +97,14 @@ export async function importRecord(
         sha256: image.hash, mime: image.mime, size: image.size, inboxFingerprint: image.fingerprint,
         status: queued ? 'UPLOADED' as const : 'DRAFT' as const, reviewReason: null, processedAt: null,
       };
-      if (upload) { await manager.update(UploadEntity, upload.id, values); }
+      if (upload) {
+        const priorUpload = upload.priorUpload ?? (upload.status === 'VALIDATED' ? {
+          storageKey: upload.storageKey, originalName: upload.originalName, sha256: upload.sha256,
+          processedAt: upload.processedAt, status: upload.status,
+        } : null);
+        await manager.update(UploadEntity, upload.id, values);
+        await manager.query('UPDATE uploads SET prior_upload=$2::jsonb, pending_ocr=NULL WHERE id=$1', [upload.id, JSON.stringify(priorUpload)]);
+      }
       else upload = await manager.save(UploadEntity, {
         ...values, ownerId: project.ownerId, projectId: project.id, recordId: record.id, eventId: null, role: image.role,
       });
@@ -121,9 +133,8 @@ export async function scanProjectInbox(source: DataSource, project: ProjectEntit
     const stat = await fs.stat(path.join(inbox, entry.name));
     if (Date.now() - stat.mtimeMs >= 1500) names.push(entry.name);
   }
-  // A validated half has already moved to processed while the other half can
-  // remain in the inbox for review. Include only the existing partner of a
-  // number actually present in the inbox; never rescan the whole archive.
+  // When only one image is reinserted, reuse its accepted partner. Include
+  // only numbers present in the inbox; never rescan the whole archive.
   const paths = new Map(names.map((name) => [name, path.join(inbox, name)]));
   const numbers = new Set(names.map((name) => pairIdentity(name)!.number));
   const stored = await source.getRepository(UploadEntity).findBy({ projectId: project.id });
@@ -159,6 +170,7 @@ export async function migrateProjectStorage(source: DataSource) {
   const legacy = process.env.LEGACY_UPLOAD_DIR ?? path.resolve('storage/uploads');
   const projects = await source.getRepository(ProjectEntity).find({ withDeleted: true });
   for (const project of projects) {
+    if (project.deletedAt && !project.storageFolder) continue;
     const projectRoot = await ensureProjectFolders(project);
     // If the process stopped during a delete, the database transaction rolled
     // back. Restore its moved files before serving requests again.
@@ -175,7 +187,7 @@ export async function migrateProjectStorage(source: DataSource) {
     const uploads = await source.getRepository(UploadEntity).findBy({ projectId: project.id });
     for (const upload of uploads) {
       const key = `${projectFolderName(project)}/${upload.status === 'VALIDATED' ? 'processed' : 'to-process'}/${upload.id}${path.extname(upload.originalName).toLowerCase()}`;
-      if (upload.storageKey.includes('/processed/') || upload.storageKey.includes('/to-process/')) {
+      if (upload.storageKey.includes('/processed/') || upload.storageKey.includes('/to-process/') || upload.storageKey.includes('/unprocessed/')) {
         if (upload.status === 'PROCESSING' && upload.storageKey.includes('/to-process/')) {
           const incoming = resolveStoredFile(upload.storageKey);
           const destination = path.join(projectRoot, 'processed', upload.id + path.extname(upload.originalName).toLowerCase());

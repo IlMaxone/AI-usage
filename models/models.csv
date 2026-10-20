@@ -1,4 +1,15 @@
 key,provider,name,reasoning,currency,five_hour_window_cost,cost_per_minute,max_time_window_minutes,available
-gpt-5.6-sol,OpenAI,GPT-5.6 Sol,high,EUR,13.54,0.1455,93:03,true
-gpt-6-astra,OpenAI,GPT-6 Astra,high,EUR,13.54,0.3373,40:08,true
-gpt-6.1-sol,OpenAI,GPT-6.1 Sol,high,EUR,13.54,0.1212,111:43,true
+5.6 sol light,OpenAI,GPT-5.6 Sol,light,EUR,13.54,0.1221,110:52,true
+5.6 sol light fast,OpenAI,GPT-5.6 Sol,light fast,EUR,13.54,0.3053,44:21,true
+5.6 sol high,OpenAI,GPT-5.6 Sol,high,EUR,13.54,0.1455,93:03,true
+5.6 sol high fast,OpenAI,GPT-5.6 Sol,high fast,EUR,13.54,0.3636,37:14,true
+5.6 sol medium,OpenAI,GPT-5.6 Sol,medium,EUR,13.54,0.1540,87:54,true
+5.6 sol medium fast,OpenAI,GPT-5.6 Sol,medium fast,EUR,13.54,0.3851,35:10,true
+5.6 sol xhigh,OpenAI,GPT-5.6 Sol,xhigh,EUR,13.54,0.1998,67:47,true
+5.6 sol xhigh fast,OpenAI,GPT-5.6 Sol,xhigh fast,EUR,13.54,0.4994,27:07,true
+6 astra light,OpenAI,GPT-6 Astra,light,EUR,13.54,0.3053,44:21,true
+6 astra light fast,OpenAI,GPT-6 Astra,light fast,EUR,13.54,0.7634,17:44,true
+6 astra high,OpenAI,GPT-6 Astra,high,EUR,13.54,0.3373,40:08,true
+6 astra high fast,OpenAI,GPT-6 Astra,high fast,EUR,13.54,0.8433,16:03,true
+6.1 sol high,OpenAI,GPT-6.1 Sol,high,EUR,13.54,0.1212,111:43,true
+6.1 sol high fast,OpenAI,GPT-6.1 Sol,high fast,EUR,13.54,0.3030,44:41,true

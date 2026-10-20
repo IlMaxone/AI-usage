@@ -15,9 +15,10 @@ applicativo ha dipendenze proprie sotto `web-app`; non importa il motore storico
 
 ```text
 models/models.csv                      catalogo di configurazione
-projects/<nome>--<id-breve>/
-├── to-process/                        ingresso e foto da verificare
+projects/<nome>/
+├── to-process/                        ingresso
 ├── processed/                         foto convalidate
+├── unprocessed/                       tentativi falliti
 └── deleted/<id-rilevazione>/           foto rimosse, con manifest
 ```
 
@@ -30,9 +31,16 @@ Un record rappresenta uno screenshot singolo (`CONSTANT`) o una coppia
 inizio/fine (`SEGMENT`). Gli upload hanno ruoli `SINGLE`, `START` ed `END`.
 Snapshot OCR, revisioni delle riletture, correzioni manuali, osservazioni
 temporali, tag modello e audit sono entità distinte. Non si salva il testo OCR.
+Le letture A/B sono preparate separatamente e pubblicate insieme in transazione.
+Un fallimento iniziale rimuove record e riferimenti upload, mantenendo foto e
+alert persistente; una rilettura fallita ripristina l'ultima coppia valida.
 
-Il suffisso ID evita collisioni tra nomi progetto. La rinomina dalla UI aggiorna
-cartella e riferimenti; non rinominare manualmente i nomi tecnici collegati al DB.
+Le cartelle usano il nome normalizzato, senza ID o suffissi automatici. Creazione
+e rinomina bloccano i nomi già usati, anche con maiuscole, accenti o separatori
+diversi che produrrebbero la stessa cartella. Il vincolo vale fra account e
+riserva anche i nomi dei progetti eliminati, che non vengono riaperti o migrati.
+I nuovi account iniziano senza un progetto automatico. La rinomina dalla UI aggiorna cartella, riferimenti
+e manifest di recupero; non rinominare manualmente i file collegati al DB.
 La migrazione da `web-app/storage/uploads/` copia i file collegati nel nuovo
 archivio. File non associati e `_unassigned/` rimangono nel vecchio archivio.
 

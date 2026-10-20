@@ -27,15 +27,18 @@
         <button [class.active]="tab() === 'projects'" (click)="setTab('projects')"><span>▦</span> I progetti</button>
         <button [class.active]="tab() === 'insert'" (click)="setTab('insert')"><span>↥</span> Nuova lettura</button>
         <button [class.active]="tab() === 'records'" (click)="setTab('records')"><span>☷</span> Archivio usage @if (activeValidations()) { <b>{{ activeValidations() }}</b> }</button>
-        <button [class.active]="tab() === 'analysis'" (click)="setTab('analysis')"><span>▧</span> Analisi immagini</button>
         <button [class.active]="tab() === 'models'" (click)="setTab('models')"><span>⚙</span> Modelli</button>
       </nav>
       <div class="privacy-stamp">OCR LOCALE<br>DATI PRIVATI<br>✓ VERIFICATO</div>
-      <div class="sidebar-foot"><div class="avatar">{{ auth.user()!.displayName.slice(0, 1).toUpperCase() }}</div><div><strong>{{ auth.user()!.displayName }}</strong><small>{{ auth.user()!.email }}</small></div><button class="logout" title="Esci" (click)="logout()">↗</button></div>
+      <div class="sidebar-foot">
+        <button class="user-profile" [class.active]="tab() === 'profile'" aria-label="Apri profilo utente" title="Profilo utente" (click)="setTab('profile')"><span class="avatar">{{ auth.user()!.displayName.slice(0, 1).toUpperCase() }}</span><span class="user-copy"><strong>{{ auth.user()!.displayName }}</strong><small>{{ auth.user()!.email }}</small></span></button>
+        <button class="notification-bell" [attr.aria-label]="'Notifiche OCR: ' + ocrFailures().length" title="Notifiche OCR" (click)="setTab('profile')"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" stroke-linecap="round" stroke-linejoin="round"/></svg>@if (ocrFailures().length) { <b class="notification-count" aria-hidden="true">{{ ocrFailures().length > 99 ? '99+' : ocrFailures().length }}</b> }</button>
+        <button class="logout" (click)="logout()"><span aria-hidden="true">↗</span> Esci</button>
+      </div>
     </aside>
 
     <main class="workspace">
-      <header class="topbar"><div><p class="eyebrow">IL TUO QUADERNO OPERATIVO</p><h1>{{ tabTitle() }}</h1></div><button class="secondary" (click)="tab() === 'analysis' ? loadAnalysisImages() : refresh()" [disabled]="loading() || analysisLoading()">{{ loading() || analysisLoading() ? 'Aggiorno…' : 'Aggiorna dati' }}</button></header>
+      <header class="topbar"><div><p class="eyebrow">IL TUO QUADERNO OPERATIVO</p><h1>{{ tabTitle() }}</h1></div><button class="secondary" (click)="refreshArchive()" [disabled]="loading()">{{ loading() ? 'Aggiorno…' : 'Aggiorna dati' }}</button></header>
       @if (message()) { <p class="alert success">{{ message() }}</p> }
       @if (error()) { <p class="alert error">{{ error() }}</p> }
 
@@ -56,24 +59,10 @@
       }
 
       @if (tab() === 'analytics') {
-        <article class="panel exploration-panel">
-          <div class="panel-head"><div><p class="eyebrow">COSTI PER MODELLO OCR</p><h2>{{ explorationEnabled() ? 'Confronto temporaneo' : 'I modelli delle tue immagini' }}</h2></div><label class="exploration-toggle"><span>Modalità esplorativa</span><button type="button" class="apple-switch" role="switch" [attr.aria-checked]="explorationEnabled()" aria-label="Modalità esplorativa" (click)="toggleExploration()"><span></span></button></label></div>
-          <div class="exploration-controls"><label>Progetto<select [value]="costProjectId()" (change)="selectCostProject($any($event.target).value)"><option value="">Tutti i progetti</option>@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
-            @if (explorationEnabled()) { <label>Modello da confrontare<select [value]="costModelId()" (change)="selectCostModel($any($event.target).value)">@for (model of models(); track model.id) { @if (model.pricing.costPerMinute > 0) { <option [value]="model.id">{{ model.name }} · {{ model.reasoning }}</option> } }</select></label> }
-          </div>
-          @if (explorationEnabled()) { <p class="exploration-notice">Simulazione senza salvataggio. Manteniamo i minuti equivalenti originali e applichiamo la tariffa del modello scelto. I tag OCR rimangono invariati.</p> }
-          @if (costAnalysisLoading()) { <p class="muted">Calcolo dei costi…</p> }
-          @else if (costAnalysis(); as analysis) {
-            @if (analysis.summary.unpricedRecords) { <p class="batch-warning">{{ analysis.summary.unpricedRecords }} rilevazioni senza costo calcolabile: modello da riconoscere o non disponibile nel CSV, coppia con modelli diversi o tariffa incompleta. I totali sono parziali.</p> }
-            <div class="cost-comparison"><div><small>{{ explorationEnabled() ? 'Costo con il modello simulato' : 'Costo stimato · tag OCR originali' }}</small><strong>{{ analysis.summary.estimatedCost | currency:'EUR':'symbol':'1.2-8' }}</strong></div><div><small>Minuti equivalenti originali</small><strong>{{ analysis.summary.estimatedUsageMinutes === null ? '—' : (analysis.summary.estimatedUsageMinutes | number:'1.0-4') }}</strong></div>@if (explorationEnabled()) { <div><small>Differenza rispetto all’originale</small><strong>{{ analysis.summary.costDifference | currency:'EUR':'symbol':'1.2-8' }}</strong><small>Originale {{ analysis.summary.actualEstimatedCost | currency:'EUR':'symbol':'1.2-8' }}</small></div> }</div>
-            <div class="table-wrap"><table><thead><tr><th>Data / progetto</th><th>Tag OCR originale</th>@if (explorationEnabled()) { <th>Modello simulato</th> }<th>Usage attribuito</th><th>Costo stimato</th></tr></thead><tbody>@for (item of analysis.items; track item.recordId) {
-              <tr><td>{{ item.capturedAt | date:'dd MMM, HH:mm:ss' }}<small>{{ item.project?.name }}</small></td><td>{{ item.sourceModel ? item.sourceModel.name + ' · ' + item.sourceModel.reasoning : (item.tagStatus === 'MODEL_MISMATCH' ? 'Modelli diversi nella coppia' : 'Da riconoscere') }}</td>@if (explorationEnabled()) { <td>{{ analysis.model?.name }} · {{ analysis.model?.reasoning }}</td> }<td>{{ item.attributedUsedPct | number:'1.0-2' }}%</td><td>{{ item.estimatedCost === null ? '—' : (item.estimatedCost | currency:'EUR':'symbol':'1.2-8') }}</td></tr>
-            } @empty { <tr><td colspan="5" class="empty">Nessuna rilevazione misurata per questo filtro.</td></tr> }</tbody></table></div>
-          }
-        </article>
+
         @if (dashboard(); as data) {
           <section class="metrics">
-            <article class="metric hero-metric"><span>Utilizzo attribuito</span><strong>{{ data.metrics.usedPctSum | number:'1.0-2' }}<small>%</small></strong><p>Usage costante e delta dei segmenti con finestra 5h coerente</p></article>
+            <article class="metric hero-metric"><span>Finestre equivalenti usate</span><strong>{{ data.metrics.equivalentWindows | number:'1.0-2' }}</strong><p>Uso attribuito su {{ data.metrics.windowCount }} finestre 5h osservate · senza doppi conteggi</p></article>
             <article class="metric"><span>Rilevazioni misurate</span><strong>{{ data.metrics.measuredRecords }}<small>/{{ data.metrics.records }}</small></strong><p>{{ data.metrics.segments }} segmenti inizio/fine</p></article>
             <article class="metric"><span>Crediti extra spesi</span><strong>{{ data.metrics.extraCreditsSpent | number }}</strong><p>€ {{ data.metrics.extraPaidEur | number:'1.2-2' }} dichiarati</p></article>
           </section>
@@ -104,18 +93,25 @@
             } @else { <div class="empty">Il grafico apparirà dopo la prima lettura OCR validata.</div> }
           </article>
           <section class="split-grid">
-            <article class="panel span-two"><div class="panel-head"><div><p class="eyebrow">ULTIME RILEVAZIONI</p><h2>I dati parlano da soli</h2></div><button class="text-button" (click)="setTab('insert')">Nuovo inserimento →</button></div>
-              <div class="table-wrap"><table><thead><tr><th>Data</th><th>Progetto</th><th>Tipo</th><th>Usage 5h</th></tr></thead><tbody>
-                @for (item of data.recentRecords; track item.id) {
-                  <tr><td>{{ (item.capturedAt || item.createdAt) | date:'dd MMM, HH:mm:ss' }}</td><td><span class="project-dot" [style.background]="item.project?.color"></span>{{ item.project?.name || 'Progetto eliminato' }}</td><td>{{ item.mode === 'CONSTANT' ? 'Usage costante' : 'Segmento di usage' }}</td><td><span class="status" [class.warn]="item.usage.usedPct === null">{{ statusLabel(item.usage.status) }}</span><strong class="usage">{{ item.usage.usedPct === null ? '—' : (item.usage.usedPct | number:'1.0-2') + '%' }}</strong></td></tr>
-                } @empty { <tr><td colspan="4" class="empty">Nessuna rilevazione. Crea un progetto e inserisci il primo screenshot.</td></tr> }
-              </tbody></table></div>
-            </article>
-            <article class="panel"><div class="panel-head"><div><p class="eyebrow">PROGETTI</p><h2>Distribuzione</h2></div><button class="text-button" (click)="setTab('projects')">Gestisci →</button></div><div class="project-list">
-              @for (project of data.projects; track project.id) { <div class="project-row"><span class="project-icon" [style.background]="project.color">{{ project.name.slice(0, 1).toUpperCase() }}</span><div><strong>{{ project.name }}</strong><small>{{ project.recordCount }} rilevazioni</small></div><b>{{ project.usedPctSum | number:'1.0-1' }}%</b></div> }
+
+            <article class="panel"><div class="panel-head"><div><p class="eyebrow">PROGETTI</p><h2>Distribuzione</h2><p class="muted">Quota dell’utilizzo attribuito a ciascun progetto sul totale.</p></div><button class="text-button" (click)="setTab('projects')">Gestisci →</button></div><div class="project-list">
+              @for (project of data.projects; track project.id) { <div class="project-row"><span class="project-icon" [style.background]="project.color">{{ project.name.slice(0, 1).toUpperCase() }}</span><div><strong>{{ project.name }}</strong><small>{{ project.recordCount }} rilevazioni · {{ (project.usedPctSum || 0) / 100 | number:'1.0-2' }} finestre eq.</small></div><b>{{ project.usageSharePct | number:'1.0-2' }}%</b></div> }
             </div></article>
             <article class="panel"><div class="panel-head"><div><p class="eyebrow">APPEND-ONLY</p><h2>Crediti extra</h2></div></div><p class="muted">Ogni acquisto è considerato interamente speso, con residuo assunto pari a zero.</p><form class="compact-form" [formGroup]="creditsForm" (ngSubmit)="addCredits()"><label>Crediti<input type="number" formControlName="credits"></label><label>Pagato EUR<input type="number" formControlName="paidEur" step="0.01"></label><label>Data<input type="datetime-local" formControlName="purchasedAt"></label><button class="secondary" type="submit" [disabled]="creditsForm.invalid">Registra acquisto</button></form></article>
-          </section>
+          <article class="panel span-two">
+          <div class="panel-head"><div><p class="eyebrow">DETTAGLIO RILEVAZIONI</p><h2>Usage e costi</h2></div><label class="exploration-toggle"><span>Modalità esplorativa</span><button type="button" class="apple-switch" role="switch" [attr.aria-checked]="explorationEnabled()" aria-label="Modalità esplorativa" (click)="toggleExploration()"><span></span></button></label></div>
+          <div class="exploration-controls"><label>Progetto<select [value]="costProjectId()" (change)="selectCostProject($any($event.target).value)"><option value="">Tutti i progetti</option>@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
+            @if (explorationEnabled()) { <label>Modello da confrontare<select [value]="costModelId()" (change)="selectCostModel($any($event.target).value)">@for (group of modelGroups(); track group.key) { <optgroup [label]="group.name">@for (model of group.variants; track model.id) { @if (model.pricing.costPerMinute > 0) { <option [value]="model.id">{{ reasoningLabel(model.reasoning) }}</option> } }</optgroup> }</select></label> }
+          </div>
+          @if (explorationEnabled()) { <p class="exploration-notice">Simulazione senza salvataggio. Manteniamo i minuti equivalenti originali e applichiamo la tariffa del modello scelto. I tag OCR rimangono invariati.</p> }
+          @if (costAnalysisLoading()) { <p class="muted">Calcolo dei costi…</p> }
+          @else if (costAnalysis(); as analysis) {
+            @if (analysis.summary.unpricedRecords) { <p class="batch-warning">{{ analysis.summary.unpricedRecords }} rilevazioni senza costo calcolabile: modello da riconoscere o non disponibile nel CSV, coppia con modelli diversi o tariffa incompleta. I totali sono parziali.</p> }
+            <div class="table-wrap"><table><thead><tr><th>Data / progetto</th><th>Tag OCR originale</th>@if (explorationEnabled()) { <th>Modello simulato</th> }<th>Usage attribuito</th><th>Minuti stimati</th>@if (explorationEnabled()) { <th>Costo originale</th> }<th>{{ explorationEnabled() ? 'Costo simulato' : 'Costo stimato' }}</th>@if (explorationEnabled()) { <th>Differenza</th> }</tr></thead><tbody>@for (item of analysis.items; track item.recordId) {
+              <tr><td>{{ item.capturedAt | date:'dd MMM, HH:mm:ss' }}<small>{{ item.project?.name }}</small></td><td>{{ item.sourceModel ? item.sourceModel.name + ' · ' + reasoningLabel(item.sourceModel.reasoning) : (item.tagStatus === 'MODEL_MISMATCH' ? 'Modelli diversi nella coppia' : 'Da riconoscere') }}</td>@if (explorationEnabled()) { <td>{{ analysis.model?.name }} · {{ reasoningLabel(analysis.model?.reasoning) }}</td> }<td>{{ item.attributedUsedPct | number:'1.0-2' }}%</td><td>{{ item.estimatedUsageMinutes === null ? '—' : (item.estimatedUsageMinutes | number:'1.0-2') + ' min' }}</td>@if (explorationEnabled()) { <td>{{ item.actualEstimatedCost === null ? '—' : (item.actualEstimatedCost | currency:'EUR':'symbol':'1.2-8') }}</td> }<td>{{ item.estimatedCost === null ? '—' : (item.estimatedCost | currency:'EUR':'symbol':'1.2-8') }}</td>@if (explorationEnabled()) { <td>{{ item.costDifference === null ? '—' : (item.costDifference | currency:'EUR':'symbol':'1.2-8') }}</td> }</tr>
+            } @empty { <tr><td [attr.colspan]="explorationEnabled() ? 8 : 5" class="empty">Nessuna rilevazione misurata per questo filtro.</td></tr> }</tbody></table></div>
+          }
+        </article></section>
         }
       }
 
@@ -138,41 +134,48 @@
 
       @if (tab() === 'insert') {
         <section class="content-grid insert-grid">
-          <article class="panel form-panel"><p class="eyebrow">INSERIMENTO GUIDATO</p><h2>Screenshot di usage</h2><p class="muted">Carica fino a 30 screenshot singoli dall’app, oppure inserisci le coppie A1/B1, A2/B2 nella cartella del progetto.</p>
+          <article class="panel form-panel"><p class="eyebrow">INSERIMENTO GUIDATO</p><h2>Screenshot di usage</h2><p class="muted">Carica screenshot singoli o coppie A/B direttamente dall’app, oppure usa la cartella del progetto.</p>
             @if (!projects().length) { <p class="alert error">Prima crea almeno un progetto dalla pagina Gestione progetti.</p> }
             <form class="stack-form" [formGroup]="recordForm" (ngSubmit)="startValidation()">
               <label>Progetto<select formControlName="projectId" (change)="refreshInbox()">@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
-              <label>Tipo di inserimento<select formControlName="mode" (change)="refreshInbox()"><option value="CONSTANT">Screenshot singoli · uno o più file</option><option value="SEGMENT">Coppie A/B · cartella del progetto</option></select></label>
+              <label>Tipo di inserimento<select formControlName="mode" (change)="changeUploadMode()"><option value="CONSTANT">Screenshot singoli · uno o più file</option><option value="SEGMENT">Coppie A/B · inizio e fine</option></select></label>
+              @if (recordForm.controls.mode.value === 'SEGMENT') {
+                <label>Caricamento coppie<select [value]="pairSource()" (change)="changePairSource($any($event.target).value)"><option value="FILES">Carica file dall’app</option><option value="FOLDER">Cartella del progetto</option></select></label>
+              }
               @if (recordForm.controls.mode.value === 'CONSTANT') {
                 <label class="dropzone" [class.selected]="selectedFiles().single"><input type="file" multiple accept="image/png,image/jpeg,image/webp" (change)="chooseFile('single', $event)"><span>{{ selectedFiles().single ? '✓' : '↥' }}</span><strong>{{ selectedFiles().single?.name || 'Screenshot usage · fino a 30 file' }}</strong><small>{{ selectedFiles().single ? selectedFiles().single?.size + ' · ' + selectedFiles().single?.count + ' batch separati' : 'Ogni immagine diventa una rilevazione autonoma' }}</small></label>
+              } @else if (pairSource() === 'FILES') {
+                <label class="dropzone" [class.selected]="selectedFiles().pairs"><input type="file" multiple accept="image/png,image/jpeg,image/webp" aria-label="Seleziona coppie A/B" (change)="chooseFile('pairs', $event)"><span>{{ selectedFiles().pairs ? '✓' : '↥' }}</span><strong>{{ selectedFiles().pairs?.name || 'Seleziona A1/B1, A2/B2…' }}</strong><small>Fino a 30 coppie · abbinate per numero, indipendentemente dall’ordine</small></label>
+                @for (issue of pairPlan().issues; track $index) { <p class="batch-warning">{{ issue }}</p> }
+                @for (pair of pairPlan().pairs; track pair.number) { <small>Coppia {{ pair.number }}: {{ pair.start.name }} → {{ pair.end.name }}</small> }
               } @else {
                 <div class="folder-inbox">
                   <strong>Cartella di ingresso</strong><code>{{ projectInboxPath() }}</code>
                   <p>A è l’inizio, B la fine: A1/B1, A2/B2, ecc. Puoi aggiungere file anche ad app spenta. Le coppie complete vengono elaborate automaticamente.</p>
                   <button type="button" class="primary" (click)="selectProjectImages()" [disabled]="pickerBusy() || recordForm.invalid">{{ pickerBusy() ? 'Selezione Windows aperta…' : 'Carica immagini' }}</button>
                   <button type="button" (click)="scanProjectFolder()" [disabled]="loading() || recordForm.invalid">Controlla cartella ora</button>
-                  <small>{{ inboxFiles().length }} file in to-process. I validati passano in processed e sono consultabili in Analisi immagini.</small>
+                  <small>{{ inboxFiles().length }} file in to-process. I validati passano in processed e sono consultabili in Archivio usage.</small>
                   @for (file of inboxFiles(); track file) { <span class="inbox-file">{{ file }}</span> }
                   @for (issue of inboxIssues(); track issue.number) { <p class="batch-warning">Coppia {{ issue.number }}: {{ issue.reason }}</p> }
                 </div>
               }
-              @if (recordForm.controls.mode.value === 'CONSTANT') {
+              @if (recordForm.controls.mode.value === 'CONSTANT' || pairSource() === 'FILES') {
               <label>Nota facoltativa<textarea formControlName="note" rows="2" placeholder="Solo contesto sintetico, senza dati personali"></textarea></label>
               @if (uploadFeedback()) { <p class="upload-feedback"><span>✓</span>{{ uploadFeedback() }}</p> }
               <button class="primary validate-button" type="submit" [disabled]="loading() || recordForm.invalid || !projects().length || !batchReady()"><span>✓</span><strong>Avvia {{ plannedBatchCount() > 1 ? plannedBatchCount() + ' convalide' : 'convalida' }}</strong><small>Ogni batch avrà 3 letture OCR indipendenti · almeno 2 devono concordare</small></button>
               }
             </form>
           </article>
-          <article class="panel explainer"><p class="eyebrow">COME FUNZIONA</p><h2>File singoli e cartelle</h2><div class="explain-step"><b>01</b><div><strong>Screenshot singoli</strong><p>Ogni immagine è una lettura indipendente. Puoi selezionare fino a 30 file dall’app.</p></div></div><div class="explain-step"><b>02</b><div><strong>Coppie numerate</strong><p>Deposita A1 e B1, A2 e B2 in to-process. Le coppie incomplete aspettano il file mancante.</p></div></div><div class="explain-step"><b>03</b><div><strong>Validazione e archivio</strong><p>Almeno due letture devono concordare. I file validati passano in processed; quelli dubbi rimangono in ingresso.</p></div></div><div class="explain-step"><b>04</b><div><strong>Rilettura senza duplicati</strong><p>Reinserire un’immagine aggiorna l’OCR della rilevazione esistente. La lettura precedente rimane tracciata.</p></div></div></article>
+          <article class="panel explainer"><p class="eyebrow">COME FUNZIONA</p><h2>Screenshot e coppie A/B</h2><div class="explain-step"><b>01</b><div><strong>Screenshot singoli</strong><p>Ogni immagine è una lettura indipendente. Puoi selezionare fino a 30 file dall’app.</p></div></div><div class="explain-step"><b>02</b><div><strong>Coppie numerate</strong><p>Seleziona A1/B1, A2/B2 dall’app oppure depositali in to-process. L’abbinamento segue il numero.</p></div></div><div class="explain-step"><b>03</b><div><strong>Validazione e archivio</strong><p>Almeno due letture devono concordare. I file validati passano in processed; i tentativi falliti in unprocessed, con un alert nel Profilo.</p></div></div><div class="explain-step"><b>04</b><div><strong>Rilettura senza duplicati</strong><p>Reinserire un’immagine aggiorna l’OCR della rilevazione esistente. Una rilettura fallita conserva l’ultima coppia valida.</p></div></div></article>
         </section>
       }
 
       @if (tab() === 'records') {
         <section class="analysis-toolbar archive-toolbar panel">
-          <div><p class="eyebrow">ARCHIVIO PER PROGETTO</p><h2>{{ visibleRecords().length }} rilevazioni</h2><p>Un progetto alla volta, per mantenere leggibili segmenti, correzioni e controlli OCR.</p></div>
+          <div><p class="eyebrow">ARCHIVIO PER PROGETTO</p><h2>{{ visibleRecords().length }} {{ visibleRecords().length === 1 ? 'rilevazione' : 'rilevazioni' }}</h2><p>Un progetto alla volta, per mantenere leggibili segmenti, correzioni e controlli OCR.</p></div>
           <label>Progetto<select [value]="recordsProjectId()" (change)="selectRecordsProject($any($event.target).value)">@for (project of recordProjects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
         </section>
-        <section class="records-layout">
+        <section class="records-layout" [class.with-correction]="correctionTarget()">
           <div class="record-list">
             @for (record of visibleRecords(); track record.id) {
               <article class="panel record-card"><div class="record-head"><div><span class="project-dot large" [style.background]="record.project?.color"></span><p class="eyebrow">{{ record.project?.name || 'PROGETTO ELIMINATO' }}</p><h2>{{ record.mode === 'CONSTANT' ? 'Usage costante' : 'Segmento di usage' }}</h2><small>{{ recordCapturedAt(record) | date:'dd MMM yyyy, HH:mm:ss' }}</small></div><div class="record-result"><span class="status" [class.warn]="record.status === 'MANUAL_REVIEW' || record.status === 'FAILED'">{{ statusLabel(record.status) }}</span><strong>{{ record.usage.usedPct === null ? '—' : (record.usage.usedPct | number:'1.0-2') + '%' }}</strong></div></div>
@@ -183,7 +186,25 @@
                   } }
                 </div>
                 @if (record.note) { <p class="record-note">{{ record.note }}</p> }
-                <div class="record-actions">@if (record.mode === 'SEGMENT') { <button class="secondary" (click)="openRecordImages(record)">Dettagli screenshot</button> } @if (record.status === 'MANUAL_REVIEW' || record.status === 'FAILED' || record.status === 'DRAFT') { <button class="secondary" [disabled]="retryingRecordIds().has(record.id)" (click)="retryValidation(record.id)">{{ retryingRecordIds().has(record.id) ? 'Riaccodamento…' : 'Ripeti tripla verifica' }}</button> } @if (record.status === 'VALIDATING') { <button class="secondary" disabled>OCR in corso…</button> }<button class="danger-link" (click)="deleteRecord(record.id)">Elimina rilevazione</button></div>
+                <div class="record-actions"><button class="secondary" type="button" (click)="toggleRecordImages(record)" [attr.aria-expanded]="expandedRecordIds().has(record.id)" [attr.aria-controls]="'record-images-' + record.id"><span aria-hidden="true">{{ expandedRecordIds().has(record.id) ? '▾' : '▸' }}</span> Screenshot {{ record.mode === 'SEGMENT' ? 'A/B' : '' }}</button> @if (record.status === 'MANUAL_REVIEW' || record.status === 'FAILED' || record.status === 'DRAFT') { <button class="secondary" [disabled]="retryingRecordIds().has(record.id)" (click)="retryValidation(record.id)">{{ retryingRecordIds().has(record.id) ? 'Riaccodamento…' : 'Ripeti tripla verifica' }}</button> } @if (record.status === 'VALIDATING') { <button class="secondary" disabled>OCR in corso…</button> }<button class="danger-link" (click)="deleteRecord(record.id)">Elimina rilevazione</button></div>
+                @if (expandedRecordIds().has(record.id)) {
+                  <section [attr.id]="'record-images-' + record.id" aria-label="Screenshot della rilevazione">
+                    @if (recordImages()[record.id]; as state) {
+                      @if (state.loading) { <p class="muted" role="status">Caricamento screenshot…</p> }
+                      @else if (state.error) { <p class="batch-warning" role="alert">{{ state.error }}</p> }
+                      @else {
+                        <div class="analysis-segment-grid" [class.segment]="record.mode === 'SEGMENT'">
+                          @for (image of state.images; track image.id) {
+                            <button class="analysis-card" type="button" (click)="selectedImage.set(image)" [attr.aria-label]="'Apri ' + roleLabel(image.role)">
+                              <div class="analysis-preview"><img [src]="image.url" [alt]="roleLabel(image.role)" loading="lazy"></div>
+                              <div class="analysis-copy"><span class="project-dot" [style.background]="image.project?.color"></span><div><strong>{{ roleLabel(image.role) }}</strong><small>{{ image.originalName }}</small><small>{{ uploadStatus(image.status) }}</small></div></div>
+                            </button>
+                          } @empty { <p class="muted">Nessuno screenshot disponibile.</p> }
+                        </div>
+                      }
+                    }
+                  </section>
+                }
               </article>
             } @empty { <div class="panel empty">Nessuna rilevazione disponibile.</div> }
           </div>
@@ -193,41 +214,27 @@
         </section>
       }
 
-      @if (tab() === 'analysis') {
-        <section class="analysis-toolbar panel">
-          <div><p class="eyebrow">CARTELLA SCREENSHOT</p><h2>{{ analysisImageGroups().length }} rilevazioni · {{ visibleAnalysisImages().length }} immagini</h2><p>Ogni blocco riunisce gli screenshot appartenenti allo stesso usage costante o segmento inizio/fine.</p></div>
-          <label>Progetto da analizzare<select [value]="analysisProjectId()" (change)="selectAnalysisProject($any($event.target).value)">@for (project of recordProjects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
+      @if (tab() === 'records' && selectedImage(); as image) {
+        <div class="image-lightbox" role="dialog" aria-modal="true" aria-label="Anteprima screenshot" (click)="selectedImage.set(null)" (document:keydown.escape)="selectedImage.set(null)">
+          <button aria-label="Chiudi anteprima" (click)="selectedImage.set(null)">×</button>
+          <figure (click)="$event.stopPropagation()"><img [src]="image.url" [alt]="image.originalName"><figcaption><strong>{{ roleLabel(image.role) }}</strong><span>{{ image.originalName }}</span></figcaption></figure>
+        </div>
+      }
+
+      @if (tab() === 'profile') {
+        <section class="panel failure-note"><p class="eyebrow">PROFILO UTENTE</p><h2>{{ auth.user()!.displayName }}</h2><p>{{ auth.user()!.email }}</p><h3>Notifiche OCR fissate · {{ ocrFailures().length }}</h3><p>Le coppie mai convalidate restano solo qui e in unprocessed. Puoi ricaricarle da Nuova lettura: un esito positivo risolve l’alert, senza duplicare i dati. Una rilettura fallita conserva l’ultima lettura valida.</p></section>
+        <section class="failure-list">
+          @for (notification of ocrFailures(); track notification.id) {
+            <article class="panel failure-note"><p class="eyebrow">📌 {{ notification.project?.name || 'Progetto non disponibile' }}</p><h2>{{ notification.pairNumber ? 'Coppia ' + notification.pairNumber : notification.originalName }}</h2><p>{{ notification.files.join(' · ') || notification.originalName }}</p><p class="batch-warning">{{ notification.originalName }}: {{ notification.reason }}</p><p class="muted">{{ notification.createdAt | date:'dd MMM yyyy, HH:mm:ss' }}</p><code>{{ notification.project?.folder }}</code>@if (!notification.fileAvailable) { <p class="muted">Il file sorgente non risulta disponibile sul disco.</p> }</article>
+          } @empty { <article class="panel failure-note">Nessun errore OCR da verificare.</article> }
         </section>
-        @if (analysisLoading()) { <div class="panel empty">Preparo le anteprime dalla cartella locale…</div> }
-        @else {
-          <section class="analysis-groups">
-            @for (group of analysisImageGroups(); track group.key) {
-              <article class="panel analysis-segment" [class.focused]="group.recordId === selectedAnalysisRecordId()" [attr.id]="group.recordId ? 'analysis-record-' + group.recordId : null">
-                <header class="analysis-segment-head"><div><p class="eyebrow">{{ group.mode === 'SEGMENT' ? 'SEGMENTO DI USAGE' : 'USAGE COSTANTE' }}</p><h2>{{ group.mode === 'SEGMENT' ? 'Inizio e fine della rilevazione' : 'Screenshot della rilevazione' }}</h2></div><div class="segment-meta"><strong>{{ group.capturedAt | date:'dd MMM yyyy, HH:mm:ss' }}</strong><small>{{ group.images.length }} {{ group.images.length === 1 ? 'screenshot' : 'screenshot abbinati' }}</small></div></header>
-                <div class="analysis-segment-grid" [class.segment]="group.mode === 'SEGMENT'">
-                  @for (item of group.images; track item.id) {
-                    <article class="analysis-card" (click)="selectedAnalysisImage.set(item)" tabindex="0" (keydown.enter)="selectedAnalysisImage.set(item)">
-                      <div class="analysis-preview"><img [src]="item.url" [alt]="'Screenshot ' + roleLabel(item.role)" loading="lazy"><span class="status" [class.warn]="item.status === 'MANUAL_REVIEW' || item.status === 'FAILED'">{{ uploadStatus(item.status) }}</span></div>
-                      <div class="analysis-copy"><span class="project-dot" [style.background]="item.project?.color"></span><div><strong>{{ roleLabel(item.role) }}</strong><small class="model-tag">{{ modelLabel(item.modelId) }} {{ item.modelId ? '· tag bloccato' : '' }}</small><small>{{ item.project?.name || 'Progetto eliminato' }} · {{ (item.capturedAt || item.createdAt) | date:'dd MMM yyyy, HH:mm:ss' }}</small><small>{{ item.originalName }} · {{ item.size / 1048576 | number:'1.2-2' }} MB</small></div></div>
-                    </article>
-                  }
-                </div>
-              </article>
-            } @empty { <div class="panel empty">Nessuno screenshot presente per questo progetto.</div> }
-          </section>
-        }
-        @if (selectedAnalysisImage(); as item) {
-          <div class="image-lightbox" role="dialog" aria-modal="true" (click)="selectedAnalysisImage.set(null)">
-            <button aria-label="Chiudi anteprima" (click)="selectedAnalysisImage.set(null)">×</button>
-            <figure (click)="$event.stopPropagation()"><img [src]="item.url" [alt]="item.originalName"><figcaption><strong>{{ item.project?.name || 'Progetto eliminato' }}</strong><span>{{ roleLabel(item.role) }} · {{ item.originalName }}</span></figcaption></figure>
-          </div>
-        }
       }
 
       @if (tab() === 'models') {
         <section class="cost-intro panel"><div><p class="eyebrow">MODELLI DISPONIBILI</p><h2>Il catalogo dei tuoi modelli.</h2><p>Modelli e tariffe sono caricati da <strong>models/models.csv</strong> a ogni avvio. Questa pagina è di sola consultazione. Il confronto temporaneo rimane in Analisi usage.</p></div><div class="cost-flow"><span>Finestra 5h</span><b>{{ fixedWindow()?.fiveHourWindowCost | currency:'EUR' }}</b><span>Fissa per tutti</span></div></section>
-        <section class="model-list">@for (model of models(); track model.id) {
-          <article class="model-card"><div class="model-logo" [class.model-logo-openai]="model.provider.toLowerCase() === 'openai'">@if (model.provider.toLowerCase() === 'openai') { <img src="brands/openai.png" alt="Logo OpenAI" width="50" height="50"> } @else { {{ model.provider.slice(0, 2).toUpperCase() }} }</div><div class="model-main"><div><p class="eyebrow">{{ model.provider }} · {{ model.catalogKey }}</p><h3>{{ model.name }}</h3><span class="status">{{ model.reasoning }}</span> @if (model.lockedAt) { <span class="status lime">Tag OCR immutabile</span> }</div><div class="price-strip"><span>Finestra fissa <strong>{{ model.pricing.fiveHourWindowCost | currency:'EUR' }}</strong></span><span>Al minuto <strong>{{ model.pricing.costPerMinute | currency:'EUR':'symbol':'1.4-4' }}</strong></span><span>Limite utilizzo in 5h <strong>{{ modelWindowDuration(model) }} min:s</strong></span></div><small class="muted">Catalogo caricato: {{ model.catalogSyncedAt | date:'dd MMM yyyy, HH:mm:ss' }}</small></div></article>
+        <section class="model-list">@for (group of modelGroups(); track group.key) {
+          @let model = selectedModelVariant(group);
+          <article class="model-card"><div class="model-logo" [class.model-logo-openai]="group.provider.toLowerCase() === 'openai'">@if (group.provider.toLowerCase() === 'openai') { <img src="brands/openai.png" alt="Logo OpenAI" width="50" height="50"> } @else { {{ group.provider.slice(0, 2).toUpperCase() }} }</div><div class="model-main"><div><p class="eyebrow">{{ group.provider }} · {{ group.variants.length }} {{ group.variants.length === 1 ? 'variante' : 'varianti' }}</p><h3>{{ group.name }}</h3><label class="model-variant">Variante<select [attr.aria-label]="'Variante di ' + group.name" [value]="model.id" (change)="selectModelVariant(group, $any($event.target).value)">@for (variant of group.variants; track variant.id) { <option [value]="variant.id">{{ reasoningLabel(variant.reasoning) }}</option> }</select></label>@if (model.lockedAt) { <span class="status lime">Tag OCR immutabile</span> }</div><div class="price-strip"><span>Finestra fissa <strong>{{ model.pricing.fiveHourWindowCost | currency:'EUR' }}</strong></span><span>Al minuto <strong>{{ model.pricing.costPerMinute | currency:'EUR':'symbol':'1.4-4' }}</strong></span><span>Limite utilizzo in 5h <strong>{{ modelWindowDuration(model) }} min:s</strong></span></div><small class="muted">Catalogo caricato: {{ model.catalogSyncedAt | date:'dd MMM yyyy, HH:mm:ss' }}</small></div></article>
         } @empty { <div class="panel empty">Nessun modello disponibile nel CSV.</div> }</section>
       }
     </main>

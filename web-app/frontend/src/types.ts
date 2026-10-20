@@ -1,6 +1,11 @@
 export interface User { id: string; email: string; displayName: string }
+export interface OcrFailureNotification {
+  id: string; originalName: string; files: string[]; reason: string; createdAt: string;
+  project: { id: string; name: string; folder: string } | null;
+  fileAvailable: boolean; pairNumber: string | null;
+}
 export interface AuthResponse { accessToken: string; expiresIn: string; user: User }
-export interface Project { id: string; name: string; color: string; modelId: string | null; folder?: string; recordCount?: number; usedPctSum?: number }
+export interface Project { id: string; name: string; color: string; modelId: string | null; folder?: string; recordCount?: number; usedPctSum?: number; usageSharePct?: number }
 export interface Pricing {
   currency: 'USD' | 'EUR'; fiveHourWindowCost: number; costPerMinute: number; maxTimeWindowMinutes?: number;
 }
@@ -77,7 +82,7 @@ export interface GalleryUpload {
   modelId: string | null; modelTaggedAt: string | null;
 }
 export interface Dashboard {
-  metrics: { records: number; measuredRecords: number; segments: number; usedPctSum: number; extraCreditsSpent: number; extraPaidEur: number };
+  metrics: { records: number; measuredRecords: number; segments: number; usedPctSum: number; equivalentWindows: number; windowCount: number; extraCreditsSpent: number; extraPaidEur: number };
   projects: Project[];
   recentRecords: DashboardRecord[];
 }

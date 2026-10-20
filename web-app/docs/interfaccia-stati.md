@@ -5,14 +5,35 @@
 | **La scrivania** | Minuti equivalenti e costo stimato per progetto. |
 | **Analisi usage** | Indicatori, ultime rilevazioni, distribuzione, crediti extra e grafico delle percentuali osservate. |
 | **I progetti** | Creazione, rinomina, colore ed eliminazione logica dei progetti. |
-| **Nuova lettura** | Screenshot singoli, batch e accesso alla cartella delle coppie. |
-| **Archivio usage** | Rilevazioni di un progetto alla volta, convalida, correzioni e rimozione. |
-| **Analisi immagini** | Foto del progetto selezionato, raggruppate per record e apribili a piena dimensione. |
+| **Nuova lettura** | Singoli e coppie A/B caricati dalla UI, oppure coppie dalla cartella. |
+| **Archivio usage** | Rilevazioni, correzioni, rimozione e foto espandibili sotto ogni record. |
 | **Modelli** | Catalogo CSV consultabile, tariffe, durata e badge OCR. |
+| **Profilo** | Account e alert OCR persistenti con progetto, nomi delle immagini e motivo. |
 
-Per i segmenti, **Dettagli screenshot** nell'archivio porta al relativo blocco
-di **Analisi immagini**, mostrando A prima di B. I file non hanno URL pubblici:
-il caricamento passa dall'API autorizzata per l'utente.
+La freccia **Screenshot** in **Archivio usage** mostra o nasconde le foto del
+record, con A prima di B. Un clic sulla miniatura apre l'immagine a piena
+dimensione; il pulsante di chiusura o Esc chiude l'anteprima. Le foto vengono
+caricate solo all'espansione. La pagina separata Analisi immagini è stata rimossa.
+I file passano sempre dall'API autorizzata per l'utente.
+
+In **Analisi usage**, **Distribuzione** mostra la quota di ogni progetto sul
+totale attribuito: le quote positive sommano al 100%, anche dopo arrotondamento.
+Le letture cumulative nella stessa finestra contribuiscono solo per incremento.
+Il totale su più finestre è espresso in **finestre equivalenti usate**, non come
+percentuale di una singola finestra: 150 punti attribuiti valgono 1,5 finestre.
+La tabella usage e costi rimane in fondo, con filtri e modalità esplorativa;
+il precedente pannello duplicato Costi per modello OCR è stato rimosso.
+Nelle ultime rilevazioni, **Minuti stimati** usa la percentuale attribuita:
+`(percentuale / 100 × 13,54 EUR) / tariffa originale al minuto`. L'esplorazione
+mantiene questi minuti e cambia solo il confronto economico.
+
+Il profilo si apre dall'avatar in basso a sinistra o dalla campanella accanto.
+Il contatore sopra la campanella mostra gli alert fissati e si ferma a **99+**;
+il numero completo rimane nel profilo. L'area utente contiene il pulsante **Esci**.
+Una coppia mai convalidata
+compare solo qui, con le foto in `unprocessed`, senza collegamenti a record da
+ritentare. Se una rilettura fallisce, l'ultima coppia valida resta nell'archivio.
+Ricaricare dalla UI o da `to-process` risolve l'alert solo dopo convalida completa.
 
 Il colore progetto si sceglie da 20 tinte del tema Warm Workbench; il predefinito
 è `#9BE15D`. Serve a identificare il progetto nell'interfaccia e non altera OCR

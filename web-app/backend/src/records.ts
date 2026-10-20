@@ -37,7 +37,7 @@ import {
   UsageSnapshotEntity,
 } from './entities';
 import { incomingDir, projectFolderName, relativeStorageKey, resolveStoredFile, uploadDir } from './storage';
-import { importRecord } from './inbox';
+import { importRecord, pairIdentity, planPairs } from './inbox';
 import { currentObservations } from './observations';
 import { archiveImages, ImageArchive, restoreArchive } from './deleted';
 
@@ -245,18 +245,14 @@ export class RecordsController {
     @Body() dto: CreateRecordDto,
     @UploadedFiles() files: RecordFiles = {},
   ) {
-    if (dto.mode === 'SEGMENT') {
-      await Promise.all([...(files.single ?? []), ...(files.start ?? []), ...(files.end ?? [])].map((file) => fs.unlink(file.path).catch(() => undefined)));
-      throw new BadRequestException('Per le coppie usa la cartella to-process del progetto con nomi A1/B1, A2/B2.');
-    }
     return this.persistRecords(user, dto, files, true);
   }
 
   private async persistRecords(user: AuthUser, dto: CreateRecordDto, files: RecordFiles, allowBatch: boolean) {
     const allFiles = [...(files.single ?? []), ...(files.start ?? []), ...(files.end ?? [])];
     const singles = files.single ?? [];
-    const starts = files.start ?? [];
-    const ends = files.end ?? [];
+    let starts = files.start ?? [];
+    let ends = files.end ?? [];
     const batchSize = dto.mode === 'CONSTANT' ? singles.length : starts.length;
     const records: UsageRecordEntity[] = [];
     try {
@@ -271,6 +267,17 @@ export class RecordsController {
         throw new BadRequestException(allowBatch
           ? 'Il batch segmento richiede lo stesso numero di screenshot iniziali e finali, da 1 a 30 coppie'
           : 'Il segmento di usage richiede screenshot iniziale e finale');
+      }
+      if (dto.mode === 'SEGMENT' && allowBatch) {
+        const plan = planPairs([...starts, ...ends].map((file) => file.originalname));
+        if (plan.ignored.length || plan.pending.length || plan.pairs.length !== starts.length ||
+          starts.some((file) => pairIdentity(file.originalname)?.role !== 'START') ||
+          ends.some((file) => pairIdentity(file.originalname)?.role !== 'END')) {
+          throw new BadRequestException('Seleziona coppie complete e univoche A1/B1, A2/B2: l’abbinamento segue il numero.');
+        }
+        const byName = new Map([...starts, ...ends].map((file) => [file.originalname, file]));
+        starts = plan.pairs.map((pair) => byName.get(pair.start)!);
+        ends = plan.pairs.map((pair) => byName.get(pair.end)!);
       }
       const project = await this.validateProject(user.id, dto.projectId);
       const destination = path.join(uploadDir, projectFolderName(project), 'to-process');
@@ -387,20 +394,23 @@ export class RecordsController {
         throw new BadRequestException('Attendi la fine dell’OCR prima di eliminare la rilevazione');
       }
       const archivedFiles = [...uploads];
-      const processedFolder = path.join(uploadDir, projectFolderName(project), 'processed');
-      let processedNames: string[] = [];
-      try { processedNames = await fs.readdir(processedFolder); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-      for (const upload of uploads) {
-        for (const name of processedNames.filter((name) => name.startsWith(upload.id + '.'))) {
-          const storageKey = relativeStorageKey(path.join(processedFolder, name));
-          if (storageKey === upload.storageKey) continue;
-          archivedFiles.push({ ...upload, storageKey, originalName: `previous-${upload.originalName}` });
+      for (const folder of ['processed', 'unprocessed']) {
+        const processedFolder = path.join(uploadDir, projectFolderName(project), folder);
+        let processedNames: string[] = [];
+        try { processedNames = await fs.readdir(processedFolder); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        for (const upload of uploads) {
+          for (const name of processedNames.filter((name) => name.startsWith(upload.id + '.'))) {
+            const storageKey = relativeStorageKey(path.join(processedFolder, name));
+            if (storageKey === upload.storageKey) continue;
+            archivedFiles.push({ ...upload, storageKey, originalName: `previous-${upload.originalName}` });
+          }
         }
       }
       archive = await archiveImages(path.join(uploadDir, projectFolderName(project), 'deleted', id), archivedFiles);
 
       const uploadIds = uploads.map((upload) => upload.id);
+      if (uploadIds.length) await manager.query('UPDATE ocr_failure_notifications SET resolved_at=now() WHERE upload_id=ANY($1::uuid[]) AND owner_id=$2 AND resolved_at IS NULL', [uploadIds, user.id]);
       const relatedIds = [id, ...uploadIds];
       if (uploadIds.length) {
         const [snapshots, corrections, captureTimes] = await Promise.all([

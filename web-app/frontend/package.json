@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "test:pairs": "node --experimental-strip-types --test scripts/pair-files.test.mjs",
     "start": "ng serve --host 0.0.0.0",
     "build": "ng build",
     "typecheck": "tsc -p tsconfig.app.json --noEmit"

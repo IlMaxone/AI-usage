@@ -9,6 +9,7 @@ import { AuthUser, CurrentUser } from './common';
 import { AiModelEntity, ProjectEntity, UploadEntity } from './entities';
 import { ensureProjectFolders, projectFolderName, uploadDir } from './storage';
 import { scanProjectInbox } from './inbox';
+import { claimProjectName, moveProjectFolder } from './project-folders';
 
 class ProjectDto {
   @IsString() @Length(1, 100) name!: string;
@@ -52,13 +53,10 @@ export class ProjectsController {
   @Post()
   async create(@CurrentUser() user: AuthUser, @Body() dto: ProjectDto) {
     const name = dto.name.trim();
-    const duplicate = await this.projects
-      .createQueryBuilder('project')
-      .where('project.owner_id = :ownerId', { ownerId: user.id })
-      .andWhere('lower(project.name) = lower(:name)', { name })
-      .getOne();
-    if (duplicate) throw new ConflictException('Progetto già presente');
-    const project = await this.projects.save({ ownerId: user.id, modelId: null, name, color: dto.color ?? '#9BE15D' });
+    const project = await this.dataSource.transaction(async (manager) => {
+      const storageFolder = await claimProjectName(manager, name);
+      return manager.save(ProjectEntity, { ownerId: user.id, modelId: null, name, storageFolder, color: dto.color ?? '#9BE15D' });
+    });
     await ensureProjectFolders(project);
     await this.audit.record(user.id, 'PROJECT_CREATED', 'project', project.id);
     return project;
@@ -70,40 +68,31 @@ export class ProjectsController {
     const previousFolder = projectFolderName(project);
     if (dto.name !== undefined) project.name = dto.name.trim();
     if (dto.color !== undefined) project.color = dto.color;
-    const nextFolder = projectFolderName(project);
-    let folderMoved = false;
+    let operation: Awaited<ReturnType<typeof moveProjectFolder>> | undefined;
     let saved: ProjectEntity;
     try {
       saved = await this.dataSource.transaction(async (manager) => {
         await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [project.id]);
         const current = await manager.findOneByOrFail(ProjectEntity, { id: project.id, ownerId: user.id });
         if (projectFolderName(current) !== previousFolder) throw new ConflictException('Progetto modificato: aggiorna e riprova.');
+        const nextFolder = dto.name === undefined ? previousFolder : await claimProjectName(manager, project.name, project.id);
+        project.storageFolder = nextFolder;
         const projectUploads = previousFolder === nextFolder ? [] : await manager.getRepository(UploadEntity)
           .createQueryBuilder('upload').where('upload.project_id = :id', { id }).setLock('pessimistic_write').getMany();
         if (previousFolder !== nextFolder) {
           if (projectUploads.some((upload) => ['UPLOADED', 'PROCESSING'].includes(upload.status))) {
             throw new BadRequestException('Attendi la fine dell’OCR prima di rinominare il progetto.');
           }
-          try {
-            await fs.rename(path.join(uploadDir, previousFolder), path.join(uploadDir, nextFolder));
-            folderMoved = true;
-          } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+          operation = await moveProjectFolder(manager, project.id, previousFolder, nextFolder);
         }
         const updated = await manager.save(ProjectEntity, project);
-        if (folderMoved) {
-          for (const upload of projectUploads) {
-            const key = upload.storageKey.replace(/\\/g, '/');
-            if (key.startsWith(previousFolder + '/')) {
-              await manager.update(UploadEntity, upload.id, { storageKey: nextFolder + key.slice(previousFolder.length) });
-            }
-          }
-        }
         return updated;
       });
     } catch (error) {
-      if (folderMoved) await fs.rename(path.join(uploadDir, nextFolder), path.join(uploadDir, previousFolder)).catch(() => undefined);
+      if (operation) await operation.undo();
       throw error;
     }
+    if (operation) await operation.finish();
     await this.audit.record(user.id, 'PROJECT_UPDATED', 'project', id, { fields: Object.keys(dto) });
     await ensureProjectFolders(saved);
     return saved;

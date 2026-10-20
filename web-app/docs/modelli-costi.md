@@ -4,7 +4,11 @@ Il catalogo è [`models/models.csv`](../../models/models.csv), alla radice del
 repository. Nome, provider, reasoning, disponibilità, tariffa al minuto e limite
 di utilizzo provengono dal CSV. La pagina **Modelli** è di sola consultazione e
 usa il logo OpenAI per quel provider. Il [formato completo](../../models/README.md)
-descrive colonne, validazioni e rinomina controllata delle key.
+descrive colonne, validazioni e rinomina controllata delle key. Le schede sono
+raggruppate per provider e famiglia (per esempio GPT-5.6 Sol): il menu a freccia
+**Variante** seleziona high, medium, xhigh e le rispettive modalità Fast per
+consultare tariffa, limite e badge. Cambiare questa selezione non modifica dati
+o tag. Anche il menu del confronto esplorativo raggruppa le varianti per famiglia.
 
 ## Import e tag
 
@@ -25,6 +29,21 @@ Non si assegna un modello predefinito. Modello e reasoning taggati non sono
 modificabili; una rilettura contraddittoria richiede verifica manuale. Una coppia
 con tag diversi non riceve un costo attribuito arbitrariamente a uno dei due.
 
+Il prefisso GPT può mancare nel selettore: `5.6 Sol Alto` corrisponde a
+GPT-5.6 Sol high. `6 Astra` e `6.0 Astra` sono equivalenti; 6.1 resta distinto.
+L'OCR controlla il selettore e, quando necessario, una seconda zona più stretta;
+ogni zona deve raggiungere autonomamente due letture concordi. Il testo delle
+conversazioni non viene usato per assegnare il modello.
+
+Il fulmine prima del nome identifica **Fast**, separatamente dal reasoning.
+La sua presenza o assenza deve concordare in almeno due passaggi; un'icona
+incerta blocca il tag, e una variante Fast assente non ricade sulla tariffa
+Standard. `flash` resta un alias storico del CSV, mostrato come Fast in app;
+`Light` (equivalente al livello API/CLI `low`) è distinto da medium e high e
+richiede una sua tariffa. Il catalogo include stime provvisorie Light fondate
+sul confronto costi/durate fornito dall'utente e sul controllo Medium misurato;
+i dettagli e i limiti sono nella [guida Light](../../models/README.md#light-e-controllo-medium).
+
 Il badge **Tag OCR immutabile** indica una prima associazione convalidata.
 Un modello appena censito senza screenshot associati può essere disponibile
 senza mostrare il badge. Gli upload storici validati e senza tag vengono
@@ -35,14 +54,15 @@ controllati dal worker senza riscrivere l'uso già rilevato.
 Il riferimento della finestra è fisso a **13,54 EUR**, comune a tutti i modelli.
 È una convenzione di progetto, non un prezzo ufficiale o una fattura osservata.
 `max_time_window_minutes` accetta minuti:secondi (`93:03`) o minuti decimali,
-entro 300 minuti. Il limite esplicito evita che tariffe arrotondate alterino i tempi.
+entro 300 minuti. È il limite dichiarato consultabile nel catalogo.
 
 ```text
-minuti equivalenti = usage attribuito / 100 × max_time_window_minutes
 costo originale = usage attribuito / 100 × 13,54 EUR
+minuti stimati = costo originale / tariffa originale al minuto
 costo esplorativo = minuti equivalenti originali × tariffa alternativa
 ```
 
+La stima dei minuti usa la tariffa CSV arrotondata; con tariffa zero è assente.
 L'esplorazione mantiene costante il lavoro equivalente e mostra la differenza
 di costo. È temporanea: nessuna scrittura a DB o browser storage; spegnendo
 l'interruttore, cambiando pagina o ricaricando l'app si ritorna all'originale.
@@ -56,5 +76,10 @@ Gli aggregati oltre il 100% rimangono lineari: minuti e costo non vengono tronca
 Acquisti extra dichiarati e osservazioni di fatturazione restano dati separati.
 Gli extra sono considerati interamente spesi, con residuo zero. Le calibrazioni
 storiche non vanno confuse con il calcolo corrente da CSV o con addebiti ufficiali.
+
+Le varianti Fast/Standard mancanti nel CSV sono completate con il fattore
+2,5 richiesto dall'utente, lasciando invariati i prezzi esistenti. Sono stime
+derivate degli EUR/min, distinte dalle misure fatturate: formule e provenienza
+sono nei registri descritti nella [guida del catalogo](../../models/README.md#fast-standard-e-provenienza).
 
 Torna all'[indice](README.md).

@@ -1,13 +1,17 @@
 import { allocateWindowUsage, calculateExploredCost, calculateModelCost } from './cost-analysis';
 
 describe('calculateModelCost', () => {
-  it('usa il limite esplicito del CSV anche con tariffe arrotondate e oltre il 100%', () => {
+  it('stima i minuti dalla percentuale, dal costo finestra e dalla tariffa originale', () => {
     const pricing = { currency: 'EUR' as const, fiveHourWindowCost: 13.54, costPerMinute: 0.1455, maxTimeWindowMinutes: 93.05 };
-    expect(calculateModelCost(50, pricing)).toMatchObject({ usageMinutesAt100: 93.05, estimatedUsageMinutes: 46.525, estimatedCost: 6.77 });
-    expect(calculateModelCost(140, pricing)).toMatchObject({ estimatedUsageMinutes: 130.27, estimatedCost: 18.956 });
-    expect(calculateExploredCost(50, pricing, { ...pricing, costPerMinute: 0.3373, maxTimeWindowMinutes: 40 + 8 / 60 })).toMatchObject({
-      estimatedUsageMinutes: 46.525, actualEstimatedCost: 6.77, estimatedCost: 15.6928825,
-    });
+    const original = calculateModelCost(50, pricing);
+    expect(original.estimatedCost).toBe(6.77);
+    expect(original.estimatedUsageMinutes).toBeCloseTo(6.77 / 0.1455, 7);
+    expect(original.usageMinutesAt100).toBeCloseTo(13.54 / 0.1455, 7);
+    expect(calculateModelCost(140, pricing).estimatedUsageMinutes).toBeCloseTo(18.956 / 0.1455, 7);
+    const explored = calculateExploredCost(50, pricing, { ...pricing, costPerMinute: 0.3373, maxTimeWindowMinutes: 40 + 8 / 60 });
+    expect(explored.estimatedUsageMinutes).toBe(original.estimatedUsageMinutes);
+    expect(explored.actualEstimatedCost).toBe(6.77);
+    expect(explored.estimatedCost).toBeCloseTo(original.estimatedUsageMinutes! * 0.3373, 10);
   });
   it('deriva dal costo al 100% il minutaggio di riferimento della finestra', () => {
     expect(calculateModelCost(25, {

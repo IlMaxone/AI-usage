@@ -16,6 +16,7 @@ import { ModelsController } from './models';
 import { ProjectsController } from './projects';
 import { RecordsController } from './records';
 import { ModelCatalogService } from './model-catalog';
+import { OcrFailureNotificationsController } from './ocr-failures';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { ModelCatalogService } from './model-catalog';
     RecordsController,
     DashboardController,
     ExtraCreditsController,
+    OcrFailureNotificationsController,
   ],
   providers: [
     ModelCatalogService,
