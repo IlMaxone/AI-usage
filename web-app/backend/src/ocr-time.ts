@@ -12,6 +12,7 @@ export function parseScreenshotCapturedAt(text: string): Date {
     Number(clock[3] ?? 0),
     0,
   );
-  if (Number.isNaN(capturedAt.getTime())) throw new Error('SCREENSHOT_TIMESTAMP_OUT_OF_RANGE');
+  if (Number.isNaN(capturedAt.getTime()) || capturedAt.getFullYear() !== Number(date[3])
+    || capturedAt.getMonth() !== Number(date[2]) - 1 || capturedAt.getDate() !== Number(date[1])) throw new Error('SCREENSHOT_TIMESTAMP_OUT_OF_RANGE');
   return capturedAt;
 }

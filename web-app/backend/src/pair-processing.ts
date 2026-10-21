@@ -2,12 +2,14 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { DataSource, In } from 'typeorm';
-import { AuditEventEntity, ProjectEntity, UploadEntity, UsageRecordEntity, UsageSnapshotEntity } from './entities';
+import { AiModelEntity, AuditEventEntity, ProjectEntity, UploadEntity, UsageRecordEntity, UsageSnapshotEntity } from './entities';
 import { FileMove, discardMoveBackups, moveFile, rollbackMoves } from './file-moves';
 import { archiveOcrFailure, resolveOcrFailure, settleFailedPair } from './ocr-failures';
 import { ensureProjectFolders, projectFolderName, relativeStorageKey, resolveStoredFile } from './storage';
+import { logOcr, OcrTrace } from './ocr-diagnostics';
 
 export interface PendingPairOcr {
+  diagnostics?: OcrTrace;
   reuseAccepted?: boolean;
   sha256: string; capturedAt: string; confidence: number; modelId: string;
   usage: { fiveHourUsedPct: number; fiveHourRemainingPct: number; fiveHourResetsAt: string; weeklyUsedPct: number; weeklyRemainingPct: number; weeklyResetsOn: string };
@@ -32,7 +34,18 @@ export async function stagePairOcr(source: DataSource, upload: UploadEntity, res
   if (members.length !== 2 || members.some((item) => !item.pendingOcr)) return;
   const results = members.map((item) => item.pendingOcr as unknown as PendingPairOcr);
   if (results[0]!.modelId !== results[1]!.modelId || Math.abs(new Date(results[0]!.usage.fiveHourResetsAt).getTime() - new Date(results[1]!.usage.fiveHourResetsAt).getTime()) > 60 * 60_000) {
-    await archiveOcrFailure(source, upload.id, 'La coppia ha modelli diversi o reset 5h non coerenti.', 'MANUAL_REVIEW');
+    const trace = result.diagnostics ?? [];
+    const differentModels = results[0]!.modelId !== results[1]!.modelId;
+    const resetOffsetMinutes = Math.abs(new Date(results[0]!.usage.fiveHourResetsAt).getTime() - new Date(results[1]!.usage.fiveHourResetsAt).getTime()) / 60000;
+    logOcr(trace, 'pair', 'error', differentModels ? 'PAIR_MODEL_MISMATCH' : 'PAIR_RESET_MISMATCH', {
+      modelId: results[0]!.modelId, expectedModelId: results[1]!.modelId, resetOffsetMinutes,
+    });
+    const models = differentModels ? await source.getRepository(AiModelEntity).findBy({ id: In(results.map((item) => item.modelId)) }) : [];
+    const reason = differentModels ? `La coppia contiene modelli/reasoning diversi: ${results.map((item) => {
+      const model = models.find((candidate) => candidate.id === item.modelId); return `${model?.name ?? item.modelId} ${model?.reasoning ?? ''}`;
+    }).join(' / ')}. Usa screenshot della stessa sessione e dello stesso modello.`
+      : `I reset 5h della coppia differiscono di ${Math.round(resetOffsetMinutes)} minuti (massimo 60). Verifica che gli screenshot appartengano alla stessa finestra e che il reset mostrato sia corretto.`;
+    await archiveOcrFailure(source, upload.id, reason, 'MANUAL_REVIEW', result.sha256, false, trace);
     await settleFailedPair(source, upload.recordId!); return;
   }
   const moves: FileMove[] = [];

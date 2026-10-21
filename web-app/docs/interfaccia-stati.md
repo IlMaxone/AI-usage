@@ -35,6 +35,27 @@ compare solo qui, con le foto in `unprocessed`, senza collegamenti a record da
 ritentare. Se una rilettura fallisce, l'ultima coppia valida resta nell'archivio.
 Ricaricare dalla UI o da `to-process` risolve l'alert solo dopo convalida completa.
 
+Nel Profilo il pulsante **Debug** apre una console scura in sola lettura: mostra
+progetto, file, stato, causa e cronologia dei passaggi OCR. Non esegue comandi
+di sistema. **Aggiorna log** rilegge gli errori ancora aperti; **Download error_logs**
+scarica `error_logs.json` nella cartella download configurata nel browser
+(normalmente Downloads). Il pulsante ×, Esc o un clic fuori chiudono il pop-up.
+
+Il JSON contiene prima `immagini_infette`, elenco delle immagini non convalidate,
+poi `logs_errori`, dettaglio per immagine e tentativo. La dicitura identifica gli
+esiti OCR, non una scansione antivirus. `PAIR_BLOCKED` distingue la metà rimasta
+bloccata dall'immagine che ha causato il fallimento. Il report include hash,
+timestamp, misure numeriche, concordanza dei passaggi, modello e modalità Fast
+quando disponibili; non include screenshot, testo OCR completo, conversazioni,
+credenziali o percorsi personali assoluti.
+
+I nuovi tentativi registrano il dettaglio anche se la coppia viene rimossa
+dall'Archivio o viene ripristinata l'ultima lettura valida. Ripetere un tentativo
+fallito aggiunge una voce alla cronologia. Gli alert antecedenti alla funzione
+conservano la causa originale e dichiarano che i passaggi non erano registrati:
+non vengono ricostruiti retroattivamente. Un caricamento riuscito risolve l'alert
+e lo esclude dal successivo report degli errori aperti.
+
 Il colore progetto si sceglie da 20 tinte del tema Warm Workbench; il predefinito
 è `#9BE15D`. Serve a identificare il progetto nell'interfaccia e non altera OCR
 o calcoli. Non esiste un modello modificabile sul progetto.
@@ -61,5 +82,12 @@ modello utilizzabile; non viene assegnata una tariffa inventata.
 
 I messaggi sono nell'app. Il selettore Windows apre un dialogo file; non è un
 servizio di notifiche desktop. Per gli errori consultare [problemi e privacy](problemi-privacy.md).
+
+Nel profilo **Riprova**, accanto a **Debug**, riaccoda gli errori aperti e mostra
+quanti tentativi sono stati accodati, già in corso o non accodabili. Il pulsante
+è disabilitato durante la preparazione e quando non ci sono alert. Non chiude
+gli avvisi prima del successo. Nel debug, l'indicazione dell'ultima lettura
+valida conservata distingue l'archivio dal tentativo fallito. Consultare la
+[diagnosi OCR](diagnosi-ocr-2026-10-21.md) per i casi storici senza riferimenti.
 
 Torna all'[indice](README.md).

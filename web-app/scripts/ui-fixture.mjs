@@ -16,8 +16,19 @@ models.push(
   { ...models[0], id: 'sol-medium-qa', reasoning: 'medium', lockedAt: null, pricing: { ...models[0].pricing, costPerMinute: 0.1540 } },
   { ...models[0], id: 'sol-high-fast-qa', reasoning: 'high fast', lockedAt: null, pricing: { ...models[0].pricing, costPerMinute: 0.3636 } },
   { ...models[0], id: 'sol61-qa', name: 'GPT-6.1 Sol', lockedAt: null, pricing: { ...models[0].pricing, costPerMinute: 0.1212 } },
+  ...['xhigh fast', 'light fast', 'medium fast', 'xhigh', 'light'].map((reasoning, index) => ({ ...models[0], id: 'sol-variant-qa-' + index, reasoning, lockedAt: null, pricing: { ...models[0].pricing, costPerMinute: 0.12 + index * .03 } })),
 );
-models.forEach((model, index) => Object.assign(model, { catalogAvailable: true, catalogKey: index ? 'gpt-6-astra-high' : 'gpt-5-6-sol-high', catalogSha256: 'invented', catalogSyncedAt: '2026-10-20T08:00:00Z' }));
+const solRates = {
+  light: [0.1221, 110 + 52 / 60], 'light fast': [0.3053, 44 + 21 / 60],
+  medium: [0.1540, 87 + 54 / 60], 'medium fast': [0.3851, 35 + 10 / 60],
+  high: [0.1455, 93 + 3 / 60], 'high fast': [0.3636, 37 + 14 / 60],
+  xhigh: [0.1998, 67 + 47 / 60], 'xhigh fast': [0.4994, 27 + 7 / 60],
+};
+models.forEach((model) => {
+  Object.assign(model, { catalogAvailable: true, catalogKey: model.id, catalogSha256: 'invented', catalogSyncedAt: '2026-10-20T08:00:00Z' });
+  const rate = model.name === 'GPT-5.6 Sol' ? solRates[model.reasoning] : null;
+  if (rate) model.pricing = { ...model.pricing, costPerMinute: rate[0], maxTimeWindowMinutes: rate[1] };
+});
 const snapshot = { capturedAt: '2026-10-20T08:00:00Z', fiveHourUsedPct: 40, fiveHourRemainingPct: 60, fiveHourResetsAt: '2026-10-20T12:00:00Z', weeklyUsedPct: 30, weeklyRemainingPct: 70, weeklyResetsOn: '2026-10-25' };
 const record = { id: 'record-qa', projectId: project.id, modelId: null, mode: 'CONSTANT', status: 'VALIDATED', note: null, createdAt: snapshot.capturedAt, project,
   single: { upload: { id: 'upload-qa', recordId: 'record-qa', role: 'SINGLE', originalName: 'Invented.png', status: 'VALIDATED', reviewReason: null, createdAt: snapshot.capturedAt, modelId: models[0].id, modelTaggedAt: snapshot.capturedAt }, rawSnapshot: snapshot, effectiveSnapshot: snapshot, correction: null }, start: null, end: null, usage: { status: 'MEASURED', usedPct: 40 } };
@@ -28,10 +39,26 @@ record.single = null;
 record.usage.status = 'SEGMENT_MEASURED';
 const gallery = [record.start, record.end].map((reading) => ({ ...reading.upload, project, mime: 'image/svg+xml', size: 500, capturedAt: snapshot.capturedAt, recordDeleted: false }));
 let writes = 0;
+let retryRequests = 0;
 const notificationCount = Math.min(150, Math.max(0, Number(process.env.UI_FIXTURE_NOTIFICATION_COUNT ?? 1)));
 const api = (url) => {
-  if (url.pathname === '/qa/stats') return { writes };
+  if (url.pathname === '/qa/stats') return { writes, retryRequests };
   if (url.pathname === '/api/projects') return [project];
+  if (url.pathname === '/api/notifications/ocr-failures/debug') {
+    const images = notificationCount ? ['B2.png', 'A2.png'] : [];
+    const entries = images.map((name, index) => ({ immagine: name, progetto: project.name, progetto_id: project.id,
+      notifica_id: 'failure-qa-0', stato: index ? 'PAIR_BLOCKED' : 'MANUAL_REVIEW', coppia: '2', immagini_associate: ['A2.png', 'B2.png'],
+      motivo: 'I passaggi OCR non concordano su data e ora visibili nello screenshot.', cartella: project.folder + '/unprocessed',
+      file_disponibile: true, sha256: index ? null : 'a'.repeat(64), dettaglio_disponibile: true,
+      tentativi: [{ id: 'invented-attempt-' + index, data: '2026-10-21T09:00:00Z', ruolo: index ? 'START' : 'END', stato: index ? 'PAIR_BLOCKED' : 'MANUAL_REVIEW', sha256: index ? null : 'a'.repeat(64),
+        log: index ? [{ at: '2026-10-21T09:00:01Z', stage: 'pair', level: 'error', code: 'PAIR_BLOCKED', details: { cause: 'OTHER_IMAGE_FAILED' } }] : [
+          { at: '2026-10-21T09:00:00Z', stage: 'image', level: 'info', code: 'IMAGE_DECODED', details: { width: 1920, height: 1080 } },
+          ...['normalized', 'soft', 'threshold'].map((pass) => ({ at: '2026-10-21T09:00:01Z', stage: 'timestamp', level: 'warning', code: 'SCREENSHOT_TIMESTAMP_UNREADABLE', details: { pass: 'timestamp-' + pass } })),
+          { at: '2026-10-21T09:00:02Z', stage: 'timestamp', level: 'error', code: 'TIMESTAMP_NO_AGREEMENT', details: { requiredMatchingPasses: 2, validPasses: [] } },
+        ] }], log_storico: [] }));
+    return { immagini_infette: entries.map(({ immagine, progetto, progetto_id, notifica_id, stato }) => ({ immagine, progetto, progetto_id, notifica_id, stato })), logs_errori: entries,
+      metadata: { formato: 'ai-usage-error-logs', versione: 1, esportato_il: '2026-10-21T10:00:00Z', numero_immagini: entries.length, testo_ocr_completo_incluso: false } };
+  }
   if (url.pathname === '/api/notifications/ocr-failures') return Array.from({ length: notificationCount }, (_, index) => ({ id: 'failure-qa-' + index, originalName: `B${index + 2}.png`, files: [`A${index + 2}.png`, `B${index + 2}.png`], pairNumber: String(index + 2), reason: 'I passaggi OCR non concordano su data e ora visibili nello screenshot.', createdAt: '2026-10-20T09:00:00Z', project: { id: project.id, name: project.name, folder: project.folder + '/unprocessed' }, fileAvailable: true }));
   if (url.pathname === '/api/projects/project-qa/inbox') return { folder: project.folder, files: [] };
   if (url.pathname === '/api/models') return models;
@@ -42,14 +69,19 @@ const api = (url) => {
   if (url.pathname === '/api/cost-analysis') {
     const exploratory = url.searchParams.get('explore') === 'true';
     const target = exploratory ? models.find((model) => model.id === url.searchParams.get('modelId')) : null;
-    const cost = target ? 54.16 * target.pricing.costPerMinute : 5.416;
+    const equivalentMinutes = 5.416 / models[0].pricing.costPerMinute;
+    const cost = target ? equivalentMinutes * target.pricing.costPerMinute : 5.416;
     return { exploratory, reference: { currency: 'EUR', fiveHourWindowCost: 13.54 }, model: target,
-      summary: { records: 1, windows: 1, unpricedRecords: 0, attributedUsedPct: 40, actualEstimatedCost: 5.416, estimatedCost: cost, costDifference: cost - 5.416, estimatedUsageMinutes: 54.16, windowCostAt100: 13.54, usageMinutesAt100: null },
-      items: [{ recordId: record.id, project, mode: record.mode, capturedAt: snapshot.capturedAt, fiveHourResetsAt: snapshot.fiveHourResetsAt, usedPct: 40, attributedUsedPct: 40, elapsedMinutes: null, windowCostAt100: 13.54, usageMinutesAt100: 135.4, estimatedCost: cost, actualEstimatedCost: 5.416, costDifference: cost - 5.416, estimatedUsageMinutes: 54.16, sourceModel: models[0], model: target ?? models[0], tagStatus: 'TAGGED' }] };
+      summary: { records: 1, windows: 1, unpricedRecords: 0, attributedUsedPct: 40, actualEstimatedCost: 5.416, estimatedCost: cost, costDifference: cost - 5.416, estimatedUsageMinutes: equivalentMinutes, windowCostAt100: 13.54, usageMinutesAt100: null },
+      items: [{ recordId: record.id, project, mode: record.mode, capturedAt: snapshot.capturedAt, fiveHourResetsAt: snapshot.fiveHourResetsAt, usedPct: 40, attributedUsedPct: 40, elapsedMinutes: null, windowCostAt100: 13.54, usageMinutesAt100: 13.54 / models[0].pricing.costPerMinute, estimatedCost: cost, actualEstimatedCost: 5.416, costDifference: cost - 5.416, estimatedUsageMinutes: equivalentMinutes, sourceModel: models[0], model: target ?? models[0], tagStatus: 'TAGGED' }] };
   }
   return undefined;
 };
 const server = http.createServer(async (request, response) => {
+  if (request.method === 'POST' && request.url === '/api/notifications/ocr-failures/retry') {
+    request.resume(); retryRequests++;
+    response.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({ queued: 1, skipped: 0, busy: false, issues: [] })); return;
+  }
   if (request.method !== 'GET') { writes++; response.writeHead(405).end(); return; }
   const url = new URL(request.url, 'http://127.0.0.1:4411');
   if (/^\/api\/records\/uploads\/(start|end)-qa\/content$/.test(url.pathname)) {

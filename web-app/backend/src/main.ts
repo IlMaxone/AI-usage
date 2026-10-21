@@ -11,13 +11,15 @@ import { migrateProjectStorage } from './inbox';
 import { uploadDir } from './storage';
 import { ModelCatalogService } from './model-catalog';
 import { recoverOcrFailures } from './ocr-failures';
-import { migrateReadableProjectFolders } from './project-folders';
+import { migrateOwnedProjectFolders } from './project-folders';
+import { recoverProjectFolders } from './project-recovery';
 
 async function bootstrap() {
   await fs.mkdir(uploadDir, { recursive: true });
   const app = await NestFactory.create(AppModule, { bodyParser: true });
   await app.get(ModelCatalogService).loadAndSync();
-  await migrateReadableProjectFolders(app.get(DataSource));
+  await migrateOwnedProjectFolders(app.get(DataSource));
+  await recoverProjectFolders(app.get(DataSource));
   await migrateProjectStorage(app.get(DataSource));
   await recoverOcrFailures(app.get(DataSource));
   app.setGlobalPrefix('api');

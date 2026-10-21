@@ -6,13 +6,15 @@ import { concatMap, forkJoin, from, map, of, Subscription, switchMap, tap, toArr
 import { ApiService, AuthService } from './services';
 import { AiModel, CostAnalysis, Dashboard, GalleryUpload, Project, Reading, UsageRecord, OcrFailureNotification } from './types';
 import { pairUploadFiles } from './pair-files';
+import { groupModels, variantOrder } from './model-groups';
+import { ModelReasoningComponent } from './model-reasoning.component';
+import { OcrDebugConsoleComponent } from './ocr-debug-console.component';
 
 type Tab = 'overview' | 'analytics' | 'projects' | 'insert' | 'records' | 'models' | 'profile';
 type ArchiveImage = GalleryUpload & { url: string };
 type FileSlot = 'single' | 'pairs';
 type SelectedFileBatch = { count: number; name: string; size: string };
 type RecordImages = { loading: boolean; images: ArchiveImage[]; error: string };
-type ModelGroup = { key: string; provider: string; name: string; variants: AiModel[] };
 type ProjectCostSummary = {
   project: Project;
   modelNames: string;
@@ -35,7 +37,7 @@ function localDateTime(value: Date | string = new Date()) {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule],
+  imports: [CommonModule, ReactiveFormsModule, ModelReasoningComponent, OcrDebugConsoleComponent],
   templateUrl: './app.component.html',
   styleUrl: './app.component.css',
 })
@@ -49,19 +51,13 @@ export class AppComponent implements OnDestroy {
   readonly error = signal('');
   readonly dashboard = signal<Dashboard | null>(null);
   readonly ocrFailures = signal<OcrFailureNotification[]>([]);
+  readonly debugConsoleOpen = signal(false);
+  readonly retryOcrBusy = signal(false);
   readonly projects = signal<Project[]>([]);
   readonly records = signal<UsageRecord[]>([]);
   readonly models = signal<AiModel[]>([]);
-  readonly selectedModelVariants = signal<Record<string, string>>({});
-  readonly modelGroups = computed<ModelGroup[]>(() => {
-    const groups = new Map<string, ModelGroup>();
-    for (const model of this.models()) {
-      const key = model.provider.toLowerCase() + ':' + model.name.toLowerCase();
-      const group = groups.get(key) ?? { key, provider: model.provider, name: model.name, variants: [] };
-      group.variants.push(model); groups.set(key, group);
-    }
-    return [...groups.values()];
-  });
+  readonly expandedModelGroups = signal<ReadonlySet<string>>(new Set());
+  readonly modelGroups = computed(() => groupModels(this.models()));
   readonly costAnalysis = signal<CostAnalysis | null>(null);
   readonly costAnalysisLoading = signal(false);
   readonly explorationEnabled = signal(false);
@@ -193,6 +189,7 @@ export class AppComponent implements OnDestroy {
   }
   ngOnDestroy() { clearInterval(this.poller); this.releaseAllRecordImages(); }
   setTab(tab: Tab) {
+    if (tab !== 'profile') this.debugConsoleOpen.set(false);
     if (tab !== 'records') this.releaseAllRecordImages();
     if (tab !== 'analytics') { this.explorationEnabled.set(false); this.costModelId.set(''); this.costAnalysis.set(null); this.costRequest++; }
     this.tab.set(tab); this.clearFeedback();
@@ -211,6 +208,7 @@ export class AppComponent implements OnDestroy {
     request.subscribe({ next: () => { this.loading.set(false); this.refresh(); }, error: (error) => this.fail(error) });
   }
   logout() {
+    this.debugConsoleOpen.set(false);
     this.explorationEnabled.set(false); this.costModelId.set(''); this.costRequest++;
     this.releaseAllRecordImages(); this.auth.logout(); this.dashboard.set(null);
     this.projects.set([]); this.records.set([]); this.models.set([]); this.costAnalysis.set(null);
@@ -551,6 +549,16 @@ export class AppComponent implements OnDestroy {
   private refreshOcrFailures() {
     this.api.ocrFailures().subscribe({ next: (items) => this.ocrFailures.set(items), error: (error: HttpErrorResponse) => { if (error.status === 401) this.logout(); } });
   }
+  retryFailedOcr() {
+    if (this.retryOcrBusy()) return;
+    this.retryOcrBusy.set(true); this.error.set(''); this.message.set('');
+    this.api.retryOcrFailures().subscribe({ next: (result) => {
+      this.retryOcrBusy.set(false);
+      this.message.set(result.busy ? 'Un nuovo tentativo è già in preparazione.'
+        : `${result.queued} tentativi OCR accodati. ${result.skipped ? `${result.skipped} già in corso. ` : ''}${result.issues.length ? `${result.issues.length} non accodabili: consulta Debug.` : 'Gli alert si chiuderanno dopo la convalida.'}`);
+      this.refresh(true);
+    }, error: (error: HttpErrorResponse) => { this.retryOcrBusy.set(false); this.error.set('Impossibile riavviare gli OCR. Riprova.'); if (error.status === 401) this.logout(); } });
+  }
   private applyDefaults(projects: Project[], models: AiModel[]) {
     const selectedProject = this.recordForm.controls.projectId.value;
     const projectId = projects.some((project) => project.id === selectedProject) ? selectedProject : projects[0]?.id || '';
@@ -567,13 +575,16 @@ export class AppComponent implements OnDestroy {
     return model ? `${model.provider} · ${model.name} · ${this.reasoningLabel(model.reasoning)}` : modelId ? 'Modello non disponibile nel CSV' : 'Modello da riconoscere';
   }
   reasoningLabel(reasoning: string | null | undefined) {
-    return (reasoning ?? '').replace(/\b(?:flash|fast)\b/gi, '⚡ Fast');
+    const { base, fast } = variantOrder(reasoning ?? '');
+    const label = ({ light: 'Light', medium: 'Medium', high: 'High', xhigh: 'XHigh', ultra: 'Ultra' } as Record<string, string>)[base] ?? base;
+    return label + (fast ? ' · Fast' : '');
   }
-  selectedModelVariant(group: ModelGroup) {
-    return group.variants.find((model) => model.id === this.selectedModelVariants()[group.key]) ?? group.variants[0]!;
-  }
-  selectModelVariant(group: ModelGroup, id: string) {
-    if (group.variants.some((model) => model.id === id)) this.selectedModelVariants.update((selected) => ({ ...selected, [group.key]: id }));
+  toggleModelGroup(key: string) {
+    this.expandedModelGroups.update((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   }
   modelWindowDuration(model: AiModel) {
     const minutes = model.pricing.maxTimeWindowMinutes ?? model.pricing.fiveHourWindowCost / model.pricing.costPerMinute;

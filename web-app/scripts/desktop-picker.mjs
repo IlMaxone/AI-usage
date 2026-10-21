@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { parseEnv } from 'node:util';
+import { pickerInbox } from './project-path.mjs';
 
 const appRoot = fileURLToPath(new URL('../', import.meta.url));
 const projectsRoot = path.resolve(appRoot, '../projects');
@@ -71,7 +72,7 @@ const server = http.createServer(async (request, response) => {
     response.setHeader('Access-Control-Allow-Private-Network', 'true');
   }
   if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
-  if (request.method === 'GET' && request.url === '/health') { response.end('{"service":"ai-usage-desktop-picker"}'); return; }
+  if (request.method === 'GET' && request.url === '/health') { response.end('{"service":"ai-usage-desktop-picker","storageVersion":2}'); return; }
   const route = /^\/projects\/([0-9a-f-]{36})\/select-images$/i.exec(request.url || '');
   if (request.method !== 'POST' || !route) { response.writeHead(404).end('{}'); return; }
   if (!request.headers.authorization?.startsWith('Bearer ')) { response.writeHead(401).end('{}'); return; }
@@ -86,12 +87,7 @@ const server = http.createServer(async (request, response) => {
     const project = projects.find((item) => item.id === route[1]);
     if (!project) { response.writeHead(404).end('{}'); return; }
     const folder = project.folder?.replace(/^projects\//, '');
-    if (!folder || !/^[a-z0-9][a-z0-9-]{0,99}$/i.test(folder)) throw new Error('Cartella progetto non valida.');
-    const inbox = path.join(projectsRoot, folder, 'to-process');
-    await fs.mkdir(inbox, { recursive: true });
-    const realRoot = await fs.realpath(projectsRoot);
-    const realInbox = await fs.realpath(inbox);
-    if (!realInbox.startsWith(realRoot + path.sep)) throw new Error('Cartella progetto non valida.');
+    const inbox = await pickerInbox(projectsRoot, folder);
     const selected = await selectImages(inbox);
     const copied = await copySelection(selected, inbox);
     response.end(JSON.stringify({ copied, cancelled: selected.length === 0 }));

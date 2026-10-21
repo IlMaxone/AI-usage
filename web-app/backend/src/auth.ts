@@ -18,6 +18,8 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { DataSource, Repository } from 'typeorm';
 import { IS_PUBLIC_KEY, Public, publicUser } from './common';
 import { ModelCatalogService } from './model-catalog';
+import { bindStorageOwner, recoverStorageOwner } from './storage-identity';
+import { recoverUserProjects } from './project-recovery';
 import {
   AuditEventEntity,
   ProjectEntity,
@@ -43,10 +45,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({ jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(), secretOrKey: secret });
   }
 
-  async validate(payload: { sub?: string }): Promise<{ id: string; email: string; displayName: string }> {
+  async validate(payload: { sub?: string; storageOwnerId?: string }): Promise<{ id: string; email: string; displayName: string }> {
     if (!payload.sub) throw new UnauthorizedException();
     const user = await this.users.findOneBy({ id: payload.sub });
-    if (!user) throw new UnauthorizedException();
+    if (!user || payload.storageOwnerId !== user.storageOwnerId) throw new UnauthorizedException();
     return publicUser(user);
   }
 }
@@ -80,12 +82,14 @@ export class AuthController {
     const email = dto.email.trim().toLowerCase();
     if (await this.users.exist({ where: { email } })) throw new ConflictException('Email già registrata');
     const passwordHash = await hash(dto.password, 12);
+    const storageOwnerId = await recoverStorageOwner(email, dto.password);
 
     const user = await this.dataSource.transaction(async (manager) => {
       const created = await manager.save(UserEntity, {
         email,
         displayName: dto.displayName.trim(),
         passwordHash,
+        storageOwnerId,
       });
       await this.catalog.syncOwner(manager, created.id);
       await manager.insert(AuditEventEntity, {
@@ -97,6 +101,8 @@ export class AuthController {
       });
       return created;
     });
+    await bindStorageOwner(user, email, dto.password);
+    await recoverUserProjects(this.dataSource, user.id);
     return this.issueToken(user);
   }
 
@@ -106,13 +112,15 @@ export class AuthController {
     const user = await this.users.findOneBy({ email: dto.email.trim().toLowerCase() });
     const valid = user ? await compare(dto.password, user.passwordHash) : false;
     if (!user || !valid) throw new UnauthorizedException('Credenziali non valide');
+    await bindStorageOwner(user, user.email, dto.password);
+    await recoverUserProjects(this.dataSource, user.id);
     return this.issueToken(user);
   }
 
   private issueToken(user: UserEntity) {
     if (!user.id) throw new BadRequestException();
     return {
-      accessToken: this.jwt.sign({ sub: user.id, email: user.email }),
+      accessToken: this.jwt.sign({ sub: user.id, email: user.email, storageOwnerId: user.storageOwnerId }),
       expiresIn: process.env.JWT_EXPIRES_IN ?? '15m',
       user: publicUser(user),
     };

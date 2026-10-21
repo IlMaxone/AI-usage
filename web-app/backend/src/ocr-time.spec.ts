@@ -17,4 +17,7 @@ describe('parseScreenshotCapturedAt', () => {
   it('rifiuta testo senza un timestamp completo', () => {
     expect(() => parseScreenshotCapturedAt('17:39 senza data')).toThrow('SCREENSHOT_TIMESTAMP_UNREADABLE');
   });
+  it('rifiuta giorni impossibili senza farli scorrere al mese successivo', () => {
+    expect(() => parseScreenshotCapturedAt('17:39:12 31/02/2026')).toThrow('SCREENSHOT_TIMESTAMP_OUT_OF_RANGE');
+  });
 });

@@ -15,7 +15,8 @@ Gli script di backup usano nomi di database e utente configurati localmente.
 
 Per un insieme coerente di SQL e file, fermare temporaneamente le scritture di
 API e worker, creare il dump lasciando `db` attivo e copiare le cartelle foto
-`projects/<nome>/`, incluso `deleted`. Conservare anche l'eventuale vecchio
+`projects/`, inclusi gli spazi UUID, `deleted`, `.storage-key` e `.owners/`.
+Conservare anche l'eventuale vecchio
 archivio `web-app/storage/uploads/`, il CSV e la configurazione locale in un
 luogo privato. I dati di `html-ocr` hanno un [backup separato](../../html-ocr/docs/migrazione-privacy.md).
 
@@ -46,6 +47,9 @@ errato. Il controllo del volume atteso è `ai-usage-web_postgres-data`.
 
 Le cartelle foto e `storage/uploads` non vengono cancellate dal reset, ma i
 collegamenti nel database vanno persi. Le foto rimaste sul disco non sono un
-sostituto del backup SQL e non ricreano automaticamente account e record.
+sostituto del backup SQL e non ricreano automaticamente account e record OCR.
+I progetti con metadati firmati possono essere ricreati dopo una registrazione
+con la stessa email e password dell'ultimo accesso. Vedere il
+[recupero per utente](progetti-utenti-recupero.md).
 
 Torna all'[indice](README.md).

@@ -33,7 +33,7 @@ const sharp = appRequire('sharp');
     const { ModelCatalogService } = require('/app/dist/model-catalog');
     const { ModelsController } = require('/app/dist/models');
     const { recoverOcrFailures } = require('/app/dist/ocr-failures');
-    const { migrateReadableProjectFolders } = require('/app/dist/project-folders');
+    const { migrateOwnedProjectFolders } = require('/app/dist/project-folders');
     const repo = (entity) => ds.getRepository(entity);
     const csvHeader = 'key,provider,name,reasoning,currency,five_hour_window_cost,cost_per_minute,max_time_window_minutes,available\n';
     const csvSol = 'sol,OpenAI,GPT-5.6 Sol,high,EUR,13.54,0.1,135:24,true\n';
@@ -252,7 +252,7 @@ const sharp = appRequire('sharp');
       await app.get(ModelCatalogService).loadAndSync();
       await app.listen(0, '127.0.0.1');
       const baseUrl = await app.getUrl();
-      const authorization = 'Bearer ' + app.get(JwtService).sign({ sub: owner.id });
+      const authorization = 'Bearer ' + app.get(JwtService).sign({ sub: owner.id, storageOwnerId: owner.storageOwnerId });
       const response = await fetch(baseUrl + '/api/models', { headers: { authorization } });
       assert.equal(response.status, 200);
       assert.equal((await response.json()).length, 2);
@@ -324,6 +324,25 @@ const sharp = appRequire('sharp');
       assert.equal(await repo(e.UploadEntity).countBy({ projectId: failureProject.id }), 0);
       assert.equal((await fs.readdir(path.join(failureRoot, 'unprocessed'))).length, 2);
       let alerts = await failedAlerts(); assert.equal(alerts.length, 1);
+      const debugResponse = await fetch(baseUrl + '/api/notifications/ocr-failures/debug', { headers: { authorization } });
+      assert.equal(debugResponse.status, 200);
+      const debugReport = await debugResponse.json();
+      assert.deepEqual(Object.keys(debugReport).slice(0, 2), ['immagini_infette', 'logs_errori']);
+      const failedPairDebug = debugReport.logs_errori.filter((item) => item.progetto_id === failureProject.id);
+      assert.deepEqual(failedPairDebug.map((item) => item.immagine).sort(), ['A51.png', 'B51.png']);
+      assert.ok(failedPairDebug.every((item) => item.file_disponibile));
+      assert.ok(failedPairDebug.some((item) => item.tentativi.some((attempt) => attempt.log.some((event) => event.code === 'TIMESTAMP_NO_AGREEMENT'))));
+      assert.ok(failedPairDebug.some((item) => item.stato === 'PAIR_BLOCKED'));
+      assert.ok(!JSON.stringify(debugReport).includes('unreadable'));
+      const foreignDebug = await fetch(baseUrl + '/api/notifications/ocr-failures/debug', { headers: { authorization: 'Bearer ' + registered.accessToken } });
+      assert.equal(foreignDebug.status, 200);
+      assert.deepEqual((await foreignDebug.json()).immagini_infette, []);
+      assert.equal((await fetch(baseUrl + '/api/notifications/ocr-failures/debug')).status, 401);
+      assert.equal((await fetch(baseUrl + '/api/notifications/ocr-failures/retry', { method: 'POST' })).status, 401);
+      const foreignRetry = await fetch(baseUrl + '/api/notifications/ocr-failures/retry', { method: 'POST', headers: { authorization: 'Bearer ' + registered.accessToken } });
+      assert.equal(foreignRetry.status, 201);
+      assert.equal((await foreignRetry.json()).queued, 0);
+      assert.equal(await repo(e.UploadEntity).countBy({ projectId: failureProject.id }), 0);
       assert.equal(alerts[0].recordId, null); assert.equal(alerts[0].fileAvailable, true);
       assert.deepEqual(alerts[0].files.sort(), ['A51.png', 'B51.png']);
       assert.equal((await failedAlerts('Bearer ' + registered.accessToken)).length, 0);
@@ -334,11 +353,23 @@ const sharp = appRequire('sharp');
       await uploadPair(a, b); await processMember('END', 60, false);
       assert.equal((await failedAlerts()).length, 1);
       assert.equal(await repo(e.UploadEntity).countBy({ projectId: failureProject.id }), 0);
+      const repeatedDebug = await fetch(baseUrl + '/api/notifications/ocr-failures/debug', { headers: { authorization } });
+      const repeatedImage = (await repeatedDebug.json()).logs_errori.find((item) => item.progetto_id === failureProject.id && item.stato === 'MANUAL_REVIEW');
+      assert.ok(repeatedImage.tentativi.length >= 2);
       Object.assign(failureProject, await projectController.update(user, failureProject.id, { name: 'Renamed synthetic failure' }));
       failureRoot = await ensureProjectFolders(failureProject);
       alerts = await failedAlerts(); assert.equal(alerts[0].fileAvailable, true);
       assert.ok(alerts[0].project.folder.includes('renamed-synthetic-failure'));
-      await uploadPair(a, b);
+      const renamedDebug = await fetch(baseUrl + '/api/notifications/ocr-failures/debug', { headers: { authorization } });
+      assert.ok((await renamedDebug.json()).logs_errori.filter((item) => item.progetto_id === failureProject.id).every((item) => item.file_disponibile));
+      const retryRequest = () => fetch(baseUrl + '/api/notifications/ocr-failures/retry', { method: 'POST', headers: { authorization } });
+      const retryResponse = await retryRequest(); assert.equal(retryResponse.status, 201);
+      assert.ok((await retryResponse.json()).queued >= 1);
+      assert.equal(await repo(e.UploadEntity).countBy({ projectId: failureProject.id, status: 'UPLOADED' }), 2);
+      assert.equal((await failedAlerts()).length, 1); // No premature dismissal.
+      const queuedInputs = (await fs.readdir(path.join(failureRoot, 'to-process'))).sort();
+      const repeatRetry = await retryRequest(); assert.equal((await repeatRetry.json()).queued, 0);
+      assert.deepEqual((await fs.readdir(path.join(failureRoot, 'to-process'))).sort(), queuedInputs);
       await processMember('START', 80); await processMember('END', 60);
       assert.equal(await repo(e.UsageRecordEntity).countBy({ projectId: failureProject.id }), 1);
       assert.equal((await failedAlerts()).length, 0);
@@ -363,7 +394,8 @@ const sharp = appRequire('sharp');
       }
       assert.equal((await failedAlerts()).length, 1);
       await recoverOcrFailures(ds); assert.equal((await failedAlerts()).length, 1);
-      await uploadPair(newA, newB);
+      const retryAccepted = await retryRequest(); assert.ok((await retryAccepted.json()).queued >= 1);
+      assert.equal(JSON.stringify(await repo(e.UsageSnapshotEntity).find({ where: acceptedUploads.map((upload) => ({ uploadId: upload.id })), order: { uploadId: 'ASC' } })), acceptedSnapshots);
       await processMember('START', 70); await processMember('END', 40);
       assert.equal((await failedAlerts()).length, 0);
       assert.equal(await repo(e.UsageRecordEntity).countBy({ projectId: failureProject.id }), 1);
@@ -371,12 +403,12 @@ const sharp = appRequire('sharp');
       assert.equal(Number((await repo(e.UsageSnapshotEntity).findOneByOrFail({ uploadId: updatedA.id })).fiveHourUsedPct), 30);
       assert.ok((await fs.readFile(resolveStoredFile(updatedA.storageKey))).equals(newA));
 
-      // Human folder names are unique globally after normalization, including
-      // simultaneous requests and renames. No numeric or UUID suffix is invented.
+      // Names are unique within an owner, including simultaneous requests and
+      // renames. Other owners get independent UUID roots for the same name.
       const createProject = (name, auth = authorization) => fetch(baseUrl + '/api/projects', { method: 'POST', headers: { authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
       const concurrent = await Promise.all([createProject('Cliente Èlite'), createProject('cliente-elite')]);
       assert.deepEqual(concurrent.map((response) => response.status).sort(), [201, 409]);
-      assert.equal((await createProject('CLIENTE ELITE', 'Bearer ' + registered.accessToken)).status, 409);
+      assert.equal((await createProject('CLIENTE ELITE', 'Bearer ' + registered.accessToken)).status, 201);
       const clash = await fetch(baseUrl + '/api/projects/' + browserProject.id, { method: 'PATCH', headers: { authorization, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'cliente elite' }) });
       assert.equal(clash.status, 409);
       assert.equal((await repo(e.ProjectEntity).findOneByOrFail({ id: browserProject.id })).name, 'Browser pairs');
@@ -394,16 +426,16 @@ const sharp = appRequire('sharp');
       await fs.mkdir(path.join(process.env.UPLOAD_DIR, 'readable-migration', 'to-process-img'), { recursive: true });
       const retired = await repo(e.ProjectEntity).save({ ownerId: owner.id, name: 'Retired automatic', deletedAt: new Date(), color: '#9BE15D' });
       await repo(e.ProjectEntity).save({ ownerId: anotherOwner.id, name: 'Retired automatic', deletedAt: new Date(), color: '#9BE15D' });
-      await migrateReadableProjectFolders(ds);
+      await migrateOwnedProjectFolders(ds);
       assert.equal((await repo(e.ProjectEntity).findOne({ where: { id: retired.id }, withDeleted: true })).storageFolder, null);
       assert.equal((await createProject('Retired automatic')).status, 409);
       const migratedProject = await repo(e.ProjectEntity).findOneByOrFail({ id: migrationProject.id });
-      assert.equal(migratedProject.storageFolder, 'readable-migration');
+      assert.ok(migratedProject.storageFolder.endsWith('/readable-migration--' + migrationProject.id));
       const migratedUpload = await repo(e.UploadEntity).findOneByOrFail({ id: migrationUpload.id });
-      assert.equal(migratedUpload.storageKey, 'readable-migration/processed/fake.png');
+      assert.equal(migratedUpload.storageKey, migratedProject.storageFolder + '/processed/fake.png');
       assert.ok((await fs.readFile(resolveStoredFile(migratedUpload.storageKey))).equals(a));
-      const movedManifest = await fs.readFile(path.join(process.env.UPLOAD_DIR, 'readable-migration', 'deleted', path.basename(manifestFolder), 'manifest.json'), 'utf8');
-      assert.equal(JSON.parse(movedManifest).files[0].storageKey, 'readable-migration/processed/fake.png');
+      const movedManifest = await fs.readFile(path.join(process.env.UPLOAD_DIR, migratedProject.storageFolder, 'deleted', path.basename(manifestFolder), 'manifest.json'), 'utf8');
+      assert.equal(JSON.parse(movedManifest).files[0].storageKey, migratedProject.storageFolder + '/processed/fake.png');
       await assert.rejects(fs.access(oldRoot), { code: 'ENOENT' });
 
       // Legacy duplicate notices are not OCR errors. Existing files are queued
@@ -420,6 +452,21 @@ const sharp = appRequire('sharp');
       await fs.unlink(resolveStoredFile(afterDuplicate.storageKey));
       await recoverOcrFailures(ds);
       assert.equal((await repo(e.UploadEntity).findOneByOrFail({ id: migrationUpload.id })).status, 'DRAFT');
+
+      // Old purged notices have no safe partner ID. Never pair arbitrary files
+      // by listing order; preserve both files and explain the missing reference.
+      const orphanProject = await repo(e.ProjectEntity).save({ ownerId: owner.id, name: 'Legacy orphan pair', storageFolder: 'legacy-orphan-pair', color: '#9BE15D' });
+      const orphanRoot = await ensureProjectFolders(orphanProject), orphanId = randomUUID(), unknownPartner = randomUUID();
+      const orphanKey = `legacy-orphan-pair/unprocessed/${orphanId}.png`;
+      await fs.writeFile(resolveStoredFile(orphanKey), a);
+      await fs.writeFile(path.join(orphanRoot, 'unprocessed', unknownPartner + '.png'), b);
+      const orphanNotice = await repo(e.OcrFailureNotificationEntity).save({ ownerId: owner.id, projectId: orphanProject.id, uploadId: orphanId,
+        originalName: 'B91.png', pairNumber: '91', files: ['A91.png', 'B91.png'], storageKey: orphanKey, reason: 'Historical failure' });
+      const orphanRetry = await retryRequest();
+      assert.ok((await orphanRetry.json()).issues.some((item) => item.notificationId === orphanNotice.id && item.code === 'RETRY_PAIR_REFERENCE_MISSING'));
+      assert.equal(await repo(e.UploadEntity).countBy({ projectId: orphanProject.id }), 0);
+      assert.ok((await fs.readFile(resolveStoredFile(orphanKey))).equals(a));
+      assert.ok((await fs.readFile(path.join(orphanRoot, 'unprocessed', unknownPartner + '.png'))).equals(b));
     } finally { await app.close(); }
     console.log('PASS: CSV startup sync, price recalculation, stable OCR tags, available-only analyses, atomic rollback, idempotence, new-account catalog, folder and deleted workflows.');
   } finally {

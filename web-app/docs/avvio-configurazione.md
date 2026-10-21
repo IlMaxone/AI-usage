@@ -14,6 +14,11 @@ robusti, poi eseguire `npm run start:windows`. Aprire
 [localhost:4400](http://localhost:4400), registrarsi o accedere. Il file `.env`
 non deve essere pubblicato.
 
+Il passaggio alle cartelle UUID richiede un nuovo accesso: i token precedenti
+non identificano lo spazio utente. Le cartelle già associate al proprio account
+vengono migrate; per un database già azzerato seguire il
+[recupero dei progetti](progetti-utenti-recupero.md).
+
 | Variabile | Uso e valore di esempio |
 | --- | --- |
 | `POSTGRES_DB`, `POSTGRES_USER` | Database e utente, predefiniti `ai_usage`. |

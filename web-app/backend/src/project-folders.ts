@@ -2,29 +2,20 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { DataSource, EntityManager } from 'typeorm';
-import { ProjectEntity } from './entities';
-import { projectSlug, resolveStoredFile, uploadDir } from './storage';
+import { ProjectEntity, UserEntity } from './entities';
+import { ensureProjectFolders, ownedProjectFolder, projectSlug, resolveStoredFile, uploadDir } from './storage';
+import { persistProjectManifest } from './project-manifest';
 
-export async function claimProjectName(manager: EntityManager, name: string, excludeId?: string) {
-  await manager.query("SELECT pg_advisory_xact_lock(hashtextextended('project-folder-names', 0))");
+export async function claimProjectName(manager: EntityManager, ownerId: string, name: string, excludeId?: string) {
   if (!name.trim()) throw new BadRequestException('Inserisci un nome progetto.');
   const folder = projectSlug(name);
+  await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`project-name:${ownerId}:${folder}`]);
   if (['demo', 'incoming'].includes(folder) || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i.test(folder)) throw new BadRequestException('Nome progetto riservato: scegli un nome diverso.');
-  const existing = await manager.find(ProjectEntity, { withDeleted: true });
+  const existing = await manager.find(ProjectEntity, { where: { ownerId }, withDeleted: true });
   if (existing.some((p) => p.id !== excludeId && projectSlug(p.name) === folder)) {
     throw new ConflictException('Nome progetto già usato: scegli un nome diverso.');
   }
-  // Existing legacy photo roots may share the human project name, but their
-  // to-process-img / processed-images directories remain independent.
-  const entries = await fs.readdir(uploadDir, { withFileTypes: true });
-  const target = entries.find((entry) => entry.name.toLowerCase() === folder);
-  const own = excludeId ? existing.find((p) => p.id === excludeId) : null;
-  if (target && own?.storageFolder?.toLowerCase() !== folder) {
-    if (!target.isDirectory() || target.isSymbolicLink()) throw new ConflictException('Nome cartella già usato: scegli un nome diverso.');
-    const children = await fs.readdir(path.join(uploadDir, target.name));
-    if (children.some((item) => !['to-process-img', 'processed-images'].includes(item))) throw new ConflictException('Nome cartella già usato: scegli un nome diverso.');
-  }
-  return target?.name ?? folder;
+  return folder;
 }
 
 // All paths in SQL and deletion manifests move with the physical directory.
@@ -39,14 +30,22 @@ export async function moveProjectFolder(manager: EntityManager, id: string, from
   try {
     if (from !== to) {
       const oldRoot = resolveStoredFile(from), nextRoot = resolveStoredFile(to);
+      await fs.mkdir(path.dirname(nextRoot), { recursive: true });
+      for (const target of [oldRoot, nextRoot, path.dirname(nextRoot)]) {
+        try { if ((await fs.lstat(target)).isSymbolicLink()) throw new Error('INVALID_PROJECT_DIRECTORY'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      }
       let oldExists = true, nextExists = true;
       try { await fs.access(oldRoot); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') oldExists = false; else throw e; }
       try { await fs.access(nextRoot); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') nextExists = false; else throw e; }
-      if (oldExists && !nextExists) { await fs.rename(oldRoot, nextRoot); moved.push({ from: oldRoot, to: nextRoot }); }
+      const legacyPhotos = oldExists && (await fs.readdir(oldRoot)).some((name) => ['to-process-img', 'processed-images'].includes(name));
+      if (oldExists && !nextExists && !legacyPhotos) { await fs.rename(oldRoot, nextRoot); moved.push({ from: oldRoot, to: nextRoot }); }
       else if (oldExists) {
-        // The destination may already contain the independent HTML OCR photos.
+        await fs.mkdir(nextRoot, { recursive: true });
+        // Independent HTML OCR photos stay in their original root.
         for (const entry of await fs.readdir(oldRoot, { withFileTypes: true })) {
-          if (!['to-process', 'processed', 'unprocessed', 'deleted'].includes(entry.name) || entry.isSymbolicLink()) throw new Error('PROJECT_FOLDER_MERGE_UNSAFE');
+          if (['to-process-img', 'processed-images'].includes(entry.name)) continue;
+          if (!['to-process', 'processed', 'unprocessed', 'deleted', '.project.json'].includes(entry.name) || entry.isSymbolicLink()) throw new Error('PROJECT_FOLDER_MERGE_UNSAFE');
           const target = path.join(nextRoot, entry.name);
           try { await fs.access(target); throw new Error('PROJECT_FOLDER_COLLISION'); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
           const origin = path.join(oldRoot, entry.name); await fs.rename(origin, target); moved.push({ from: origin, to: target });
@@ -73,23 +72,29 @@ export async function moveProjectFolder(manager: EntityManager, id: string, from
   } catch (error) { await undo(); throw error; }
 }
 
-export async function migrateReadableProjectFolders(source: DataSource) {
+export async function migrateOwnedProjectFolders(source: DataSource) {
   const projects = await source.getRepository(ProjectEntity).find({ withDeleted: true, order: { createdAt: 'ASC' } });
   for (const project of projects) {
     // Retired projects keep their historical references and reserved names.
     // In particular, old auto-created "Generale" entries must not be reopened
     // or materialized again while migrating the active application projects.
-    if (project.storageFolder || project.deletedAt) continue;
+    if (project.deletedAt && !project.storageFolder) continue;
+    const user = await source.getRepository(UserEntity).findOne({ where: { id: project.ownerId }, withDeleted: true });
+    if (!user) continue;
+    const folder = ownedProjectFolder(user.storageOwnerId, project.id, project.name);
+    if (folder === project.storageFolder) { await persistProjectManifest(project, user.storageOwnerId); continue; }
     let operation: Awaited<ReturnType<typeof moveProjectFolder>> | undefined;
     try {
       await source.transaction(async (manager) => {
         await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [project.id]);
-        const folder = await claimProjectName(manager, project.name, project.id);
-        const previous = `${projectSlug(project.name)}--${project.id.slice(0, 8)}`;
+        const previous = project.storageFolder ?? `${projectSlug(project.name)}--${project.id.slice(0, 8)}`;
         operation = await moveProjectFolder(manager, project.id, previous, folder);
         await manager.update(ProjectEntity, project.id, { storageFolder: folder });
       });
     } catch (error) { if (operation) await operation.undo(); throw error; }
     if (operation) await operation.finish();
+    project.storageFolder = folder;
+    await ensureProjectFolders(project);
+    await persistProjectManifest(project, user.storageOwnerId);
   }
 }

@@ -14,6 +14,8 @@ import { ModelTagJobRecovery1726500000009 } from './migrations/1726500000009-mod
 import { CsvModelCatalog1726500000010 } from './migrations/1726500000010-csv-model-catalog';
 import { OcrFailureNotifications1726500000011 } from './migrations/1726500000011-ocr-failure-notifications';
 import { ReadableProjectFolders1726500000012 } from './migrations/1726500000012-readable-project-folders';
+import { OcrErrorDiagnostics1726500000013 } from './migrations/1726500000013-ocr-error-diagnostics';
+import { PrivateProjectFolders1726500000014 } from './migrations/1726500000014-private-project-folders';
 
 export function databaseOptions(migrationsRun = false) {
   const url = process.env.DATABASE_URL;
@@ -36,6 +38,8 @@ export function databaseOptions(migrationsRun = false) {
       CsvModelCatalog1726500000010,
       OcrFailureNotifications1726500000011,
       ReadableProjectFolders1726500000012,
+      OcrErrorDiagnostics1726500000013,
+      PrivateProjectFolders1726500000014,
     ],
     migrationsRun,
     synchronize: false,

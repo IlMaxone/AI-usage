@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Post } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -9,6 +9,8 @@ import { AuditEventEntity, OcrFailureNotificationEntity, ProjectEntity, UploadEn
 import { ensureProjectFolders, projectFolderName, relativeStorageKey, resolveStoredFile } from './storage';
 import { pairIdentity } from './inbox';
 import { FileMove, moveFile, rollbackMoves } from './file-moves';
+import { buildOcrDebugReport, logOcr, makeAttempt, OcrTrace, technicalOcrError } from './ocr-diagnostics';
+import { retryOcrFailures } from './ocr-retry';
 
 export const isLegacyDuplicateNotice = (reason: string) => /^Immagine già registrata; nessun nuovo snapshot creato\./i.test(reason.trim());
 
@@ -39,7 +41,7 @@ export async function resolveOcrFailure(manager: EntityManager, upload: UploadEn
 
 // Keep the file move, upload reference and pinned notification consistent.
 export async function archiveOcrFailure(source: DataSource, uploadId: string, reason: string,
-  status: 'MANUAL_REVIEW' | 'FAILED', sha256?: string, recovery = false) {
+  status: 'MANUAL_REVIEW' | 'FAILED', sha256?: string, recovery = false, trace: OcrTrace = []) {
   if (isLegacyDuplicateNotice(reason)) { await requeueLegacyDuplicateNotices(source); return; }
   let from = '', destination = '', backup = '', moved = false;
   try {
@@ -61,6 +63,7 @@ export async function archiveOcrFailure(source: DataSource, uploadId: string, re
           await fs.rename(from, destination); moved = true;
           storageKey = relativeStorageKey(destination);
         } catch (error) {
+          logOcr(trace, 'archive', 'warning', 'UNPROCESSED_MOVE_FAILED', { cause: technicalOcrError(error).code });
           if (backup && !moved) { await fs.rename(backup, destination); backup = ''; }
           message = `${message} · ${(error as NodeJS.ErrnoException).code === 'ENOENT' ? 'File sorgente non disponibile.' : 'Spostamento in unprocessed non riuscito.'}`.slice(0, 500);
         }
@@ -73,13 +76,28 @@ export async function archiveOcrFailure(source: DataSource, uploadId: string, re
       const notification = await manager.findOne(OcrFailureNotificationEntity, { where: pairNumber
         ? { ownerId: upload.ownerId, projectId: upload.projectId, pairNumber, resolvedAt: IsNull() }
         : { uploadId, resolvedAt: IsNull() } });
-      const files = upload.recordId ? (await manager.findBy(UploadEntity, { recordId: upload.recordId })).map((item) => item.originalName) : [upload.originalName];
-      if (!notification) await manager.insert(OcrFailureNotificationEntity, {
+      const members = upload.recordId ? await manager.findBy(UploadEntity, { recordId: upload.recordId }) : [upload];
+      const files = members.map((item) => item.originalName);
+      const diagnostics = [...(notification?.diagnostics ?? [])];
+      if (!recovery || !notification) {
+        const events = [...trace];
+        if (!events.length) logOcr(events, 'processing', 'error', recovery ? 'LEGACY_FAILURE' : 'FAILURE_RECORDED', { status });
+        logOcr(events, 'archive', 'info', 'FAILURE_PINNED', { fileMoved: moved, status });
+        diagnostics.push(makeAttempt(upload, storageKey, status, events, sha256));
+        for (const member of members.filter((item) => item.id !== upload.id)) {
+          if (member.pendingOcr?.reuseAccepted || (member.status === 'VALIDATED' && !member.pendingOcr && !member.priorUpload)) continue;
+          const memberEvents = Array.isArray(member.pendingOcr?.diagnostics) ? [...member.pendingOcr.diagnostics] as OcrTrace : [];
+          logOcr(memberEvents, 'pair', 'error', 'PAIR_BLOCKED', { cause: 'OTHER_IMAGE_FAILED' });
+          const memberKey = `${projectFolderName(project)}/unprocessed/${member.id}${path.extname(member.originalName).toLowerCase()}`;
+          diagnostics.push(makeAttempt(member, memberKey, 'PAIR_BLOCKED', memberEvents, typeof member.pendingOcr?.sha256 === 'string' ? member.pendingOcr.sha256 : undefined));
+        }
+      }
+      if (!notification) await manager.save(OcrFailureNotificationEntity, {
         ownerId: upload.ownerId, projectId: upload.projectId, uploadId, recordId: upload.recordId,
-        originalName: upload.originalName, reason: message, pairNumber, files, storageKey,
+        originalName: upload.originalName, reason: message, pairNumber, files, storageKey, diagnostics,
       });
-      else if (!recovery || notification.reason !== message) await manager.update(OcrFailureNotificationEntity, notification.id, {
-        reason: message, storageKey, files, uploadId, recordId: upload.recordId, originalName: upload.originalName,
+      else if (!recovery || notification.reason !== message) await manager.save(OcrFailureNotificationEntity, { id: notification.id,
+        reason: message, storageKey, files, uploadId, recordId: upload.recordId, originalName: upload.originalName, diagnostics,
       });
       if (!recovery || !notification || moved) await manager.insert(AuditEventEntity, {
         ownerId: upload.ownerId, action: 'OCR_FAILURE_PINNED', entityType: 'upload', entityId: uploadId,
@@ -164,6 +182,17 @@ export class OcrFailureNotificationsController {
   ) {}
   @Get()
   async list(@CurrentUser() user: AuthUser) {
+    return this.load(user, false);
+  }
+  @Get('debug')
+  async debug(@CurrentUser() user: AuthUser) {
+    return buildOcrDebugReport(await this.load(user, true));
+  }
+  @Post('retry')
+  async retry(@CurrentUser() user: AuthUser) {
+    return retryOcrFailures(this.notifications.manager.connection, user.id);
+  }
+  private async load(user: AuthUser, includeDiagnostics: boolean) {
     const notifications = await this.notifications.find({ where: { ownerId: user.id, resolvedAt: IsNull() }, order: { createdAt: 'DESC' } });
     if (!notifications.length) return [];
     const [projects, uploads] = await Promise.all([
@@ -175,7 +204,14 @@ export class OcrFailureNotificationsController {
       const upload = uploads.find((u) => u.id === notification.uploadId);
       let fileAvailable = false;
       try { await fs.access(resolveStoredFile(notification.storageKey)); fileAvailable = true; } catch {}
-      return { ...notification, project: project ? { id: project.id, name: project.name, folder: `projects/${projectFolderName(project)}/unprocessed` } : null,
+      const { diagnostics, ...summary } = notification;
+      const detailed = includeDiagnostics ? await Promise.all((diagnostics ?? []).map(async (attempt) => {
+        let available = false;
+        const key = project ? `${projectFolderName(project)}/unprocessed/${path.basename(attempt.storageKey)}` : attempt.storageKey;
+        try { await fs.access(resolveStoredFile(key)); available = true; } catch {}
+        return { ...attempt, fileAvailable: available };
+      })) : undefined;
+      return { ...summary, ...(includeDiagnostics ? { diagnostics: detailed } : {}), project: project ? { id: project.id, name: project.name, folder: `projects/${projectFolderName(project)}/unprocessed` } : null,
         status: upload?.status ?? 'FAILED', fileAvailable };
     }));
   }

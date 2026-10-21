@@ -1,4 +1,15 @@
 export interface User { id: string; email: string; displayName: string }
+export interface OcrDebugEvent { at: string; stage: string; level: string; code: string; details: Record<string, unknown> }
+export interface OcrDebugReport {
+  immagini_infette: Array<{ immagine: string; progetto: string; progetto_id: string | null; notifica_id: string; stato: string }>;
+  logs_errori: Array<{
+    immagine: string; progetto: string; notifica_id: string; coppia: string | null; immagini_associate: string[];
+    stato: string; stato_rilevazione_attuale?: string; ultima_lettura_valida_conservata?: boolean; motivo: string; cartella: string | null; file_disponibile: boolean; sha256: string | null; dettaglio_disponibile: boolean;
+    tentativi: Array<{ id: string; data: string; ruolo: string; stato: string; sha256: string | null; log: OcrDebugEvent[] }>;
+    log_storico: Array<{ at: string; stage: string; level: string; code: string; message: string; note: string }>;
+  }>;
+  metadata: { formato: string; versione: number; esportato_il: string; numero_immagini: number; testo_ocr_completo_incluso: boolean };
+}
 export interface OcrFailureNotification {
   id: string; originalName: string; files: string[]; reason: string; createdAt: string;
   project: { id: string; name: string; folder: string } | null;

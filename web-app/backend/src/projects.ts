@@ -3,13 +3,16 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsHexColor, IsOptional, IsString, IsUUID, Length } from 'class-validator';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { DataSource, IsNull, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuthUser, CurrentUser } from './common';
-import { AiModelEntity, ProjectEntity, UploadEntity } from './entities';
-import { ensureProjectFolders, projectFolderName, uploadDir } from './storage';
+import { AiModelEntity, ProjectEntity, UploadEntity, UserEntity } from './entities';
+import { ensureProjectFolders, ownedProjectFolder, projectFolderName } from './storage';
 import { scanProjectInbox } from './inbox';
 import { claimProjectName, moveProjectFolder } from './project-folders';
+import { recoverUserProjects } from './project-recovery';
+import { persistProjectManifest } from './project-manifest';
 
 class ProjectDto {
   @IsString() @Length(1, 100) name!: string;
@@ -33,6 +36,7 @@ export class ProjectsController {
 
   @Get()
   async list(@CurrentUser() user: AuthUser) {
+    await recoverUserProjects(this.dataSource, user.id);
     const projects = await this.projects.find({ where: { ownerId: user.id }, order: { name: 'ASC' } });
     return projects.map((project) => ({ ...project, folder: `projects/${projectFolderName(project)}` }));
   }
@@ -54,10 +58,14 @@ export class ProjectsController {
   async create(@CurrentUser() user: AuthUser, @Body() dto: ProjectDto) {
     const name = dto.name.trim();
     const project = await this.dataSource.transaction(async (manager) => {
-      const storageFolder = await claimProjectName(manager, name);
-      return manager.save(ProjectEntity, { ownerId: user.id, modelId: null, name, storageFolder, color: dto.color ?? '#9BE15D' });
+      const normalizedName = await claimProjectName(manager, user.id, name);
+      const owner = await manager.findOneByOrFail(UserEntity, { id: user.id });
+      const id = randomUUID(), storageFolder = ownedProjectFolder(owner.storageOwnerId, id, name);
+      return manager.save(ProjectEntity, { id, ownerId: user.id, modelId: null, name, normalizedName, storageFolder, color: dto.color ?? '#9BE15D' });
     });
     await ensureProjectFolders(project);
+    const owner = await this.dataSource.getRepository(UserEntity).findOneByOrFail({ id: user.id });
+    await persistProjectManifest(project, owner.storageOwnerId);
     await this.audit.record(user.id, 'PROJECT_CREATED', 'project', project.id);
     return project;
   }
@@ -75,7 +83,9 @@ export class ProjectsController {
         await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [project.id]);
         const current = await manager.findOneByOrFail(ProjectEntity, { id: project.id, ownerId: user.id });
         if (projectFolderName(current) !== previousFolder) throw new ConflictException('Progetto modificato: aggiorna e riprova.');
-        const nextFolder = dto.name === undefined ? previousFolder : await claimProjectName(manager, project.name, project.id);
+        const owner = await manager.findOneByOrFail(UserEntity, { id: user.id });
+        project.normalizedName = await claimProjectName(manager, user.id, project.name, project.id);
+        const nextFolder = ownedProjectFolder(owner.storageOwnerId, project.id, project.name);
         project.storageFolder = nextFolder;
         const projectUploads = previousFolder === nextFolder ? [] : await manager.getRepository(UploadEntity)
           .createQueryBuilder('upload').where('upload.project_id = :id', { id }).setLock('pessimistic_write').getMany();
@@ -95,13 +105,27 @@ export class ProjectsController {
     if (operation) await operation.finish();
     await this.audit.record(user.id, 'PROJECT_UPDATED', 'project', id, { fields: Object.keys(dto) });
     await ensureProjectFolders(saved);
+    const owner = await this.dataSource.getRepository(UserEntity).findOneByOrFail({ id: user.id });
+    await persistProjectManifest(saved, owner.storageOwnerId);
     return saved;
   }
 
   @Delete(':id')
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     await this.owned(id, user.id);
-    await this.projects.softDelete({ id, ownerId: user.id });
+    const owner = await this.dataSource.getRepository(UserEntity).findOneByOrFail({ id: user.id });
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [id]);
+        const current = await manager.findOneByOrFail(ProjectEntity, { id, ownerId: user.id });
+        await persistProjectManifest({ ...current, deletedAt: new Date() }, owner.storageOwnerId);
+        await manager.softDelete(ProjectEntity, { id, ownerId: user.id });
+      });
+    } catch (error) {
+      const current = await this.projects.findOneBy({ id, ownerId: user.id });
+      if (current) await persistProjectManifest(current, owner.storageOwnerId);
+      throw error;
+    }
     await this.audit.record(user.id, 'PROJECT_DELETED', 'project', id);
     return { deleted: true };
   }

@@ -17,7 +17,8 @@ Il server ricontrolla l'abbinamento numerico indipendentemente dall'ordine invia
 L'alternativa **Cartella del progetto** mantiene il flusso Windows e offline:
 
 Depositare `A1.png` e `B1.png`, `A2.jpg` e `B2.jpg`, ecc., in
-`projects/<nome>/to-process/`. A indica l'inizio, B la fine; il numero
+`projects/<UUID-utente>/<nome>--<UUID-progetto>/to-process/`, usando il percorso
+mostrato dall'app. A indica l'inizio, B la fine; il numero
 determina la coppia, indipendentemente dall'ordine. Sono supportati PNG, JPEG
 e WebP, anche con estensioni diverse nella stessa coppia.
 
@@ -54,6 +55,11 @@ Una rilettura fallita mantiene snapshot e foto dell'ultima coppia valida.
 Solo le coppie completamente accettate passano a `processed`.
 Le foto si aprono dalla freccia **Screenshot** sotto ogni record in **Archivio usage**.
 Consultare la motivazione di verifica prima di richiedere un nuovo tentativo.
+Il profilo offre **Riprova** accanto a **Debug** per riaccodare gli errori aperti.
+I tentativi già in coda vengono saltati; gli alert si chiudono solo a esito
+positivo. I vecchi alert senza riferimenti completi alla coppia richiedono un
+nuovo caricamento A/B una volta, indicato nel log con
+`RETRY_PAIR_REFERENCE_MISSING`. Non si abbinano foto sconosciute.
 
 ## Riletture e correzioni
 
@@ -72,5 +78,8 @@ Una nuova lettura valida aggiorna lo snapshot corrente e conserva il precedente
 in `ocr_revisions`. Le correzioni manuali dei valori sono append-only e non
 riscrivono lo snapshot OCR; quelle precedenti non prevalgono su una rilettura
 successiva. Il tag modello già assegnato rimane immutabile.
+
+Le [correzioni OCR del 21 ottobre](diagnosi-ocr-2026-10-21.md) spiegano i ritagli
+con bande nere, i reset al minuto esatto e i vecchi pannelli incompleti.
 
 Torna all'[indice](README.md) o consulta [stati e messaggi](interfaccia-stati.md).

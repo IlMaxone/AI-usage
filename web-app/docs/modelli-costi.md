@@ -5,10 +5,15 @@ repository. Nome, provider, reasoning, disponibilità, tariffa al minuto e limit
 di utilizzo provengono dal CSV. La pagina **Modelli** è di sola consultazione e
 usa il logo OpenAI per quel provider. Il [formato completo](../../models/README.md)
 descrive colonne, validazioni e rinomina controllata delle key. Le schede sono
-raggruppate per provider e famiglia (per esempio GPT-5.6 Sol): il menu a freccia
-**Variante** seleziona high, medium, xhigh e le rispettive modalità Fast per
-consultare tariffa, limite e badge. Cambiare questa selezione non modifica dati
-o tag. Anche il menu del confronto esplorativo raggruppa le varianti per famiglia.
+raggruppate per provider e famiglia (per esempio GPT-5.6 Sol). La freccia
+**Varianti**, come **Screenshot** nell'Archivio usage, espande o richiude sotto
+la scheda tutte le varianti, con tariffa, limite e badge. I gruppi partono chiusi.
+L'ordine è sempre Light, Medium, High, XHigh, Ultra: ogni variante Standard è
+seguita dalla rispettiva Fast, quando presente. Low è mostrato come Light;
+Flash è mostrato come Fast. Espandere un gruppo non modifica dati o tag.
+La modalità Fast usa un fulmine pieno monocromatico, come nel selettore dello
+screenshot, al posto dell'emoji dipendente dal sistema operativo.
+Anche il menu del confronto esplorativo rispetta gli stessi gruppi e ordine.
 
 ## Import e tag
 

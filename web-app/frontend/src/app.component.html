@@ -108,7 +108,7 @@
           @else if (costAnalysis(); as analysis) {
             @if (analysis.summary.unpricedRecords) { <p class="batch-warning">{{ analysis.summary.unpricedRecords }} rilevazioni senza costo calcolabile: modello da riconoscere o non disponibile nel CSV, coppia con modelli diversi o tariffa incompleta. I totali sono parziali.</p> }
             <div class="table-wrap"><table><thead><tr><th>Data / progetto</th><th>Tag OCR originale</th>@if (explorationEnabled()) { <th>Modello simulato</th> }<th>Usage attribuito</th><th>Minuti stimati</th>@if (explorationEnabled()) { <th>Costo originale</th> }<th>{{ explorationEnabled() ? 'Costo simulato' : 'Costo stimato' }}</th>@if (explorationEnabled()) { <th>Differenza</th> }</tr></thead><tbody>@for (item of analysis.items; track item.recordId) {
-              <tr><td>{{ item.capturedAt | date:'dd MMM, HH:mm:ss' }}<small>{{ item.project?.name }}</small></td><td>{{ item.sourceModel ? item.sourceModel.name + ' · ' + reasoningLabel(item.sourceModel.reasoning) : (item.tagStatus === 'MODEL_MISMATCH' ? 'Modelli diversi nella coppia' : 'Da riconoscere') }}</td>@if (explorationEnabled()) { <td>{{ analysis.model?.name }} · {{ reasoningLabel(analysis.model?.reasoning) }}</td> }<td>{{ item.attributedUsedPct | number:'1.0-2' }}%</td><td>{{ item.estimatedUsageMinutes === null ? '—' : (item.estimatedUsageMinutes | number:'1.0-2') + ' min' }}</td>@if (explorationEnabled()) { <td>{{ item.actualEstimatedCost === null ? '—' : (item.actualEstimatedCost | currency:'EUR':'symbol':'1.2-8') }}</td> }<td>{{ item.estimatedCost === null ? '—' : (item.estimatedCost | currency:'EUR':'symbol':'1.2-8') }}</td>@if (explorationEnabled()) { <td>{{ item.costDifference === null ? '—' : (item.costDifference | currency:'EUR':'symbol':'1.2-8') }}</td> }</tr>
+              <tr><td>{{ item.capturedAt | date:'dd MMM, HH:mm:ss' }}<small>{{ item.project?.name }}</small></td><td>@if (item.sourceModel) { {{ item.sourceModel.name }} · <app-model-reasoning [reasoning]="item.sourceModel.reasoning" /> } @else { {{ item.tagStatus === 'MODEL_MISMATCH' ? 'Modelli diversi nella coppia' : 'Da riconoscere' }} }</td>@if (explorationEnabled()) { <td>{{ analysis.model?.name }} · <app-model-reasoning [reasoning]="analysis.model?.reasoning" /></td> }<td>{{ item.attributedUsedPct | number:'1.0-2' }}%</td><td>{{ item.estimatedUsageMinutes === null ? '—' : (item.estimatedUsageMinutes | number:'1.0-2') + ' min' }}</td>@if (explorationEnabled()) { <td>{{ item.actualEstimatedCost === null ? '—' : (item.actualEstimatedCost | currency:'EUR':'symbol':'1.2-8') }}</td> }<td>{{ item.estimatedCost === null ? '—' : (item.estimatedCost | currency:'EUR':'symbol':'1.2-8') }}</td>@if (explorationEnabled()) { <td>{{ item.costDifference === null ? '—' : (item.costDifference | currency:'EUR':'symbol':'1.2-8') }}</td> }</tr>
             } @empty { <tr><td [attr.colspan]="explorationEnabled() ? 8 : 5" class="empty">Nessuna rilevazione misurata per questo filtro.</td></tr> }</tbody></table></div>
           }
         </article></section>
@@ -222,7 +222,9 @@
       }
 
       @if (tab() === 'profile') {
-        <section class="panel failure-note"><p class="eyebrow">PROFILO UTENTE</p><h2>{{ auth.user()!.displayName }}</h2><p>{{ auth.user()!.email }}</p><h3>Notifiche OCR fissate · {{ ocrFailures().length }}</h3><p>Le coppie mai convalidate restano solo qui e in unprocessed. Puoi ricaricarle da Nuova lettura: un esito positivo risolve l’alert, senza duplicare i dati. Una rilettura fallita conserva l’ultima lettura valida.</p></section>
+        <p><button class="secondary" type="button" (click)="debugConsoleOpen.set(true)">Debug</button> <button class="secondary" type="button" (click)="retryFailedOcr()" [disabled]="retryOcrBusy() || !ocrFailures().length">{{ retryOcrBusy() ? 'Preparazione…' : 'Riprova' }}</button></p>
+        @if (debugConsoleOpen()) { <app-ocr-debug-console (closed)="debugConsoleOpen.set(false)" /> }
+        <section class="panel failure-note"><p class="eyebrow">PROFILO UTENTE</p><h2>{{ auth.user()!.displayName }}</h2><p>{{ auth.user()!.email }}</p><h3>Notifiche OCR fissate · {{ ocrFailures().length }}</h3><p>Le coppie mai convalidate restano solo qui e in unprocessed. Premi Riprova per riavviare i tentativi, oppure ricaricale da Nuova lettura: un esito positivo risolve l’alert, senza duplicare i dati. Una rilettura fallita conserva l’ultima lettura valida.</p></section>
         <section class="failure-list">
           @for (notification of ocrFailures(); track notification.id) {
             <article class="panel failure-note"><p class="eyebrow">📌 {{ notification.project?.name || 'Progetto non disponibile' }}</p><h2>{{ notification.pairNumber ? 'Coppia ' + notification.pairNumber : notification.originalName }}</h2><p>{{ notification.files.join(' · ') || notification.originalName }}</p><p class="batch-warning">{{ notification.originalName }}: {{ notification.reason }}</p><p class="muted">{{ notification.createdAt | date:'dd MMM yyyy, HH:mm:ss' }}</p><code>{{ notification.project?.folder }}</code>@if (!notification.fileAvailable) { <p class="muted">Il file sorgente non risulta disponibile sul disco.</p> }</article>
@@ -233,8 +235,25 @@
       @if (tab() === 'models') {
         <section class="cost-intro panel"><div><p class="eyebrow">MODELLI DISPONIBILI</p><h2>Il catalogo dei tuoi modelli.</h2><p>Modelli e tariffe sono caricati da <strong>models/models.csv</strong> a ogni avvio. Questa pagina è di sola consultazione. Il confronto temporaneo rimane in Analisi usage.</p></div><div class="cost-flow"><span>Finestra 5h</span><b>{{ fixedWindow()?.fiveHourWindowCost | currency:'EUR' }}</b><span>Fissa per tutti</span></div></section>
         <section class="model-list">@for (group of modelGroups(); track group.key) {
-          @let model = selectedModelVariant(group);
-          <article class="model-card"><div class="model-logo" [class.model-logo-openai]="group.provider.toLowerCase() === 'openai'">@if (group.provider.toLowerCase() === 'openai') { <img src="brands/openai.png" alt="Logo OpenAI" width="50" height="50"> } @else { {{ group.provider.slice(0, 2).toUpperCase() }} }</div><div class="model-main"><div><p class="eyebrow">{{ group.provider }} · {{ group.variants.length }} {{ group.variants.length === 1 ? 'variante' : 'varianti' }}</p><h3>{{ group.name }}</h3><label class="model-variant">Variante<select [attr.aria-label]="'Variante di ' + group.name" [value]="model.id" (change)="selectModelVariant(group, $any($event.target).value)">@for (variant of group.variants; track variant.id) { <option [value]="variant.id">{{ reasoningLabel(variant.reasoning) }}</option> }</select></label>@if (model.lockedAt) { <span class="status lime">Tag OCR immutabile</span> }</div><div class="price-strip"><span>Finestra fissa <strong>{{ model.pricing.fiveHourWindowCost | currency:'EUR' }}</strong></span><span>Al minuto <strong>{{ model.pricing.costPerMinute | currency:'EUR':'symbol':'1.4-4' }}</strong></span><span>Limite utilizzo in 5h <strong>{{ modelWindowDuration(model) }} min:s</strong></span></div><small class="muted">Catalogo caricato: {{ model.catalogSyncedAt | date:'dd MMM yyyy, HH:mm:ss' }}</small></div></article>
+          <article class="model-card">
+            <header class="model-family-head">
+              <div class="model-logo" [class.model-logo-openai]="group.provider.toLowerCase() === 'openai'">@if (group.provider.toLowerCase() === 'openai') { <img src="brands/openai.png" alt="Logo OpenAI" width="50" height="50"> } @else { {{ group.provider.slice(0, 2).toUpperCase() }} }</div>
+              <div class="model-family-title"><p class="eyebrow">{{ group.provider }}</p><h3>{{ group.name }}</h3><small class="muted">{{ group.variants.length }} {{ group.variants.length === 1 ? 'variante' : 'varianti' }}</small></div>
+              <button class="secondary" type="button" (click)="toggleModelGroup(group.key)" [attr.aria-label]="'Varianti di ' + group.name" [attr.aria-expanded]="expandedModelGroups().has(group.key)" [attr.aria-controls]="'model-variants-' + $index"><span aria-hidden="true">{{ expandedModelGroups().has(group.key) ? '▾' : '▸' }}</span> Varianti</button>
+            </header>
+            @if (expandedModelGroups().has(group.key)) {
+              <section class="model-variants" [attr.id]="'model-variants-' + $index" [attr.aria-label]="'Varianti di ' + group.name">
+                @for (model of group.variants; track model.id) {
+                  <article class="model-variant-row">
+                    <div class="model-variant-name"><h4><app-model-reasoning [reasoning]="model.reasoning" /></h4>@if (model.lockedAt) { <span class="status lime">Tag OCR immutabile</span> }</div>
+                    <div><small>Al minuto</small><strong>{{ model.pricing.costPerMinute | currency:'EUR':'symbol':'1.4-4' }}</strong></div>
+                    <div><small>Limite utilizzo in 5h</small><strong>{{ modelWindowDuration(model) }} min:s</strong></div>
+                  </article>
+                }
+                <small class="muted">Catalogo caricato: {{ group.variants[0].catalogSyncedAt | date:'dd MMM yyyy, HH:mm:ss' }}</small>
+              </section>
+            }
+          </article>
         } @empty { <div class="panel empty">Nessun modello disponibile nel CSV.</div> }</section>
       }
     </main>

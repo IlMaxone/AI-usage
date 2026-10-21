@@ -1,12 +1,19 @@
 # Cartelle locali dei progetti
 
-L'app web crea automaticamente `nome-progetto/to-process/` e
-`nome-progetto/processed/`, `unprocessed/` e `deleted/`. Queste cartelle e tutti i loro contenuti
-rimangono privati ed esclusi da Git. Questo README rende visibile la radice.
-I nomi sono univoci dopo normalizzazione: l'app rifiuta quelli già usati alla
-creazione e alla rinomina, senza aggiungere ID o numeri. Le vecchie cartelle con
-ID vengono migrate insieme ai collegamenti e ai manifest, mantenendo separate
-le cartelle foto del motore storico.
+L'app web crea `UUID-utente/nome-progetto--UUID-progetto/`, contenente
+`to-process/`, `processed/`, `unprocessed/`, `deleted/` e il metadato firmato
+`.project.json`. Cartelle reali e contenuti sono privati ed esclusi da Git.
+Questo README rende visibile la radice. Ogni account ha uno spazio UUID distinto:
+utenti diversi possono usare lo stesso nome; i duplicati normalizzati sono
+rifiutati all'interno del medesimo account. La UI mostra il nome leggibile.
+
+Il recupero automatico ricrea i progetti dai metadati dopo un reset, quando il
+proprietario si registra nuovamente con la stessa email e password dell'ultimo
+accesso. Le immagini e i metadati devono essere ancora presenti, inclusi
+`.storage-key` e `.owners/`: sono privati, non contengono email/password e non
+vanno pubblicati o cancellati. Non vengono ripristinati record OCR o account.
+Una nuova identità non eredita le cartelle del primo utente registrato.
+Consultare la [guida del recupero](../web-app/docs/progetti-utenti-recupero.md).
 `demo/` rimane l'unica eccezione versionata e contiene soltanto dati inventati.
 
 Il precedente motore HTML OCR è ora isolato in [`../html-ocr/`](../html-ocr/).

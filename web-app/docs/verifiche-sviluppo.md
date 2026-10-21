@@ -8,6 +8,7 @@ npm --prefix web-app/backend run typecheck
 npm --prefix web-app/backend test
 npm --prefix web-app/frontend run build
 npm --prefix web-app/frontend run test:pairs
+npm --prefix web-app/frontend run test:models
 ```
 
 I test backend coprono formule, calibrazione, uso singolo e segmenti, timestamp,
@@ -41,6 +42,11 @@ Verifica import e aggiornamento CSV, minuti da percentuale e tariffa, rollback,
 tag stabili, coppie atomiche, alert privati, riletture e recupero senza duplicati.
 Controlla che il primo fallimento lasci solo alert e foto, e che una rilettura
 fallita conservi entrambi gli snapshot e le foto precedentemente accettati.
+Verifica anche che il report debug elenchi prima i file, conservi i tentativi
+dopo la rimozione di una coppia mai valida, segua la rinomina delle cartelle e
+non sia accessibile ad altri account o senza autenticazione. I test del logger
+controllano l'esclusione di testo OCR e credenziali. La fixture UI permette di
+provare il download con dati inventati, senza importare immagini reali.
 Non importa screenshot reali. L'utente PostgreSQL configurato deve poter creare
 e rimuovere il database temporaneo; lo script lo elimina alla fine.
 
@@ -63,6 +69,26 @@ non contiene testo OCR completo o dati personali. `accepted` conta solo il
 riconoscimento del modello, non la convalida completa di usage e timestamp.
 Un terzo argomento facoltativo limita i file a nomi separati da virgole.
 Salvare eventuali rapporti di progetti reali solo in cartelle ignorate da Git.
+
+Per verificare insieme usage, timestamp e selettore, usare nello stesso comando
+`/checks/verify-screenshot-ocr.cjs` al posto di `verify-model-ocr.cjs`. Il controllo
+è offline, verifica anche l'hash invariato, non importa foto e non scrive nel
+database. `accepted` indica la convalida della singola immagine, non della
+relazione A/B: modelli e reset della coppia vanno controllati separatamente.
+
+L'integrazione verifica anche `POST /api/notifications/ocr-failures/retry`:
+riaccodamento di coppie senza record ma con riferimenti diagnostici, nessun
+doppio invio, isolamento tra utenti, snapshot precedenti preservati e gestione
+esplicita dei vecchi riferimenti A/B mancanti. I casi reali sono descritti nella
+[diagnosi OCR](diagnosi-ocr-2026-10-21.md).
+
+Per identità e recupero delle cartelle eseguire, con lo stesso mount `/checks`,
+`/checks/private-projects-smoke.cjs`. Usa un database temporaneo, conserva le
+cartelle inventate durante reset simulati e verifica che solo la stessa coppia
+email/password recuperi il proprio spazio UUID. Controlla anche omonimi fra
+utenti, metadati firmati, eliminazione senza ricreazione e foto HTML separate.
+Da `web-app`, `node --test scripts/project-path.test.mjs` verifica i percorsi
+usati dal selettore Windows senza aprire una finestra nativa.
 
 Il tema applicato è Warm Workbench. Il [mockup alternativo conservato](../mockups/03-aurora-glass.html)
 è solo un riferimento. Per una verifica grafica con dati inventati è disponibile

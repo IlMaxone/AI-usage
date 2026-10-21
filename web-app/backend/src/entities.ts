@@ -7,10 +7,12 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { OcrAttemptDiagnostic } from './ocr-diagnostics';
 
 @Entity('users')
 export class UserEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ name: 'storage_owner_id', type: 'uuid', default: () => 'gen_random_uuid()' }) storageOwnerId!: string;
   @Index({ unique: true }) @Column({ type: 'varchar', length: 320 }) email!: string;
   @Column({ name: 'password_hash', type: 'varchar', length: 100 }) passwordHash!: string;
   @Column({ name: 'display_name', type: 'varchar', length: 120 }) displayName!: string;
@@ -22,7 +24,8 @@ export class UserEntity {
 @Index(['ownerId', 'name'], { unique: true, where: 'deleted_at IS NULL' })
 export class ProjectEntity {
   @PrimaryGeneratedColumn('uuid') id!: string;
-  @Column({ name: 'storage_folder', type: 'varchar', length: 100, nullable: true }) storageFolder!: string | null;
+  @Column({ name: 'storage_folder', type: 'varchar', length: 200, nullable: true }) storageFolder!: string | null;
+  @Column({ name: 'normalized_name', type: 'varchar', length: 60, nullable: true }) normalizedName!: string | null;
   @Column({ name: 'owner_id', type: 'uuid' }) ownerId!: string;
   @Column({ name: 'model_id', type: 'uuid', nullable: true }) modelId!: string | null;
   @Column({ type: 'varchar', length: 100 }) name!: string;
@@ -244,6 +247,7 @@ export class AuditEventEntity {
 
 @Entity('ocr_failure_notifications')
 export class OcrFailureNotificationEntity {
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" }) diagnostics!: OcrAttemptDiagnostic[];
   @Column({ name: 'storage_key', type: 'varchar', length: 255 }) storageKey!: string;
   @Column({ name: 'pair_number', type: 'varchar', length: 255, nullable: true }) pairNumber!: string | null;
   @Column({ type: 'jsonb', default: () => "'[]'::jsonb" }) files!: string[];

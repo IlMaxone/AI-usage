@@ -13,15 +13,10 @@ import { projectFolderName, relativeStorageKey, resolveStoredFile } from './stor
 import { modelSelectorFailure, recognizeModelSelector } from './ocr-model';
 import { archiveOcrFailure, resolveOcrFailure, settleFailedPair } from './ocr-failures';
 import { stagePairOcr } from './pair-processing';
-
-interface ParsedUsage {
-  fiveHourRemainingPct: number;
-  fiveHourUsedPct: number;
-  fiveHourResetsAt: Date;
-  weeklyRemainingPct: number;
-  weeklyUsedPct: number;
-  weeklyResetsOn: string;
-}
+import { logOcr, OcrDiagnosticError, OcrTrace, technicalOcrError } from './ocr-diagnostics';
+import { screenshotContentBounds } from './ocr-geometry';
+import { parseUsage, ParsedUsage } from './ocr-usage';
+import { recoverProjectFolders } from './project-recovery';
 
 interface Candidate {
   pass: string;
@@ -35,66 +30,6 @@ interface TimestampCandidate {
   confidence: number;
 }
 
-const months = new Map<string, number>([
-  ['gen', 0], ['jan', 0], ['feb', 1], ['mar', 2], ['apr', 3], ['mag', 4], ['may', 4],
-  ['giu', 5], ['jun', 5], ['lug', 6], ['jul', 6], ['ago', 7], ['aug', 7],
-  ['set', 8], ['sep', 8], ['ott', 9], ['oct', 9], ['nov', 10], ['dic', 11], ['dec', 11],
-]);
-
-function normalize(text: string): string {
-  return text
-    .normalize('NFKD')
-    .replace(/[|]/g, 'I')
-    .replace(/[–—]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function parseClock(token: string): { hour: number; minute: number } {
-  const explicit = token.match(/(\d{1,2})[:.;](\d{2})/);
-  if (!explicit) throw new Error('RESET_TIME_UNREADABLE');
-  const hour = Number(explicit[1]);
-  const minute = Number(explicit[2]);
-  if (hour > 23 || minute > 59) throw new Error('RESET_TIME_OUT_OF_RANGE');
-  return { hour, minute };
-}
-
-function parseUsage(text: string, capturedAt: Date): ParsedUsage {
-  const normalized = normalize(text);
-  const fiveHour = normalized.match(/5\s*h[\s\S]{0,100}?(\d{1,3})\s*%[\s\S]{0,50}?([0-9:.;]{4,5})/i);
-  const weekly = normalized.match(/(?:Settimanale|Weekly)[\s\S]{0,120}?(\d{1,3})\s*%[\s\S]{0,60}?(\d{1,2})\s*(gen|jan|feb|mar|apr|mag|may|giu|jun|lug|jul|ago|aug|set|sep|ott|oct|nov|dic|dec)/i);
-  if (!fiveHour || !weekly) throw new Error('USAGE_VALUES_UNREADABLE');
-  const fiveHourRemainingPct = Number(fiveHour[1]);
-  const weeklyRemainingPct = Number(weekly[1]);
-  if ([fiveHourRemainingPct, weeklyRemainingPct].some((value) => value < 0 || value > 100)) {
-    throw new Error('USAGE_VALUE_OUT_OF_RANGE');
-  }
-  const { hour, minute } = parseClock(fiveHour[2]!);
-  const resetAt = new Date(capturedAt);
-  resetAt.setHours(hour, minute, 0, 0);
-  if (resetAt <= capturedAt) resetAt.setDate(resetAt.getDate() + 1);
-
-  const month = months.get(weekly[3]!.toLowerCase());
-  if (month === undefined) throw new Error('WEEKLY_RESET_UNREADABLE');
-  const weeklyReset = new Date(capturedAt.getFullYear(), month, Number(weekly[2]), 12, 0, 0, 0);
-  if (weeklyReset < new Date(capturedAt.getFullYear(), capturedAt.getMonth(), capturedAt.getDate())) {
-    weeklyReset.setFullYear(weeklyReset.getFullYear() + 1);
-  }
-  const weeklyResetsOn = [
-    weeklyReset.getFullYear(),
-    String(weeklyReset.getMonth() + 1).padStart(2, '0'),
-    String(weeklyReset.getDate()).padStart(2, '0'),
-  ].join('-');
-  return {
-    fiveHourRemainingPct,
-    fiveHourUsedPct: 100 - fiveHourRemainingPct,
-    fiveHourResetsAt: resetAt,
-    weeklyRemainingPct,
-    weeklyUsedPct: 100 - weeklyRemainingPct,
-    weeklyResetsOn,
-  };
-}
-
 function signature(usage: ParsedUsage): string {
   return [
     usage.fiveHourRemainingPct,
@@ -104,15 +39,19 @@ function signature(usage: ParsedUsage): string {
   ].join('|');
 }
 
-async function candidate(worker: Worker, pass: string, input: string | Buffer, capturedAt: Date): Promise<Candidate | null> {
+async function candidate(worker: Worker, pass: string, input: string | Buffer, capturedAt: Date, trace?: OcrTrace): Promise<Candidate | null> {
   try {
     const result = await worker.recognize(input);
-    return {
+    const item = {
       pass,
       usage: parseUsage(result.data.text, capturedAt),
       confidence: Number(result.data.confidence.toFixed(2)),
     };
-  } catch {
+    logOcr(trace, 'usage', 'info', 'PASS_ACCEPTED', { pass, confidence: item.confidence, ...item.usage });
+    return item;
+  } catch (error) {
+    const diagnostic = technicalOcrError(error);
+    logOcr(trace, 'usage', 'warning', diagnostic.code, { pass, errorName: diagnostic.errorName, frames: diagnostic.frames });
     return null;
   }
 }
@@ -123,15 +62,20 @@ async function rectangleCandidate(
   filePath: string,
   rectangle: { left: number; top: number; width: number; height: number },
   capturedAt: Date,
+  trace?: OcrTrace,
 ): Promise<Candidate | null> {
   try {
     const result = await worker.recognize(filePath, { rectangle });
-    return {
+    const item = {
       pass,
       usage: parseUsage(result.data.text, capturedAt),
       confidence: Number(result.data.confidence.toFixed(2)),
     };
-  } catch {
+    logOcr(trace, 'usage', 'info', 'PASS_ACCEPTED', { pass, confidence: item.confidence, ...item.usage });
+    return item;
+  } catch (error) {
+    const diagnostic = technicalOcrError(error);
+    logOcr(trace, 'usage', 'warning', diagnostic.code, { pass, errorName: diagnostic.errorName, frames: diagnostic.frames });
     return null;
   }
 }
@@ -142,23 +86,30 @@ function hasUsageAgreement(candidates: Candidate[]): boolean {
   return [...counts.values()].some((count) => count >= 2);
 }
 
-async function timestampCandidate(worker: Worker, pass: string, input: Buffer): Promise<TimestampCandidate | null> {
+async function timestampCandidate(worker: Worker, pass: string, input: Buffer, trace?: OcrTrace): Promise<TimestampCandidate | null> {
   try {
     const result = await worker.recognize(input);
-    return {
+    const item = {
       pass,
       capturedAt: parseScreenshotCapturedAt(result.data.text),
       confidence: Number(result.data.confidence.toFixed(2)),
     };
-  } catch {
+    logOcr(trace, 'timestamp', 'info', 'PASS_ACCEPTED', { pass, capturedAt: item.capturedAt.toISOString(), confidence: item.confidence });
+    return item;
+  } catch (error) {
+    const diagnostic = technicalOcrError(error);
+    logOcr(trace, 'timestamp', 'warning', diagnostic.code, { pass, errorName: diagnostic.errorName, frames: diagnostic.frames });
     return null;
   }
 }
 
-export async function recognizeScreenshot(worker: Worker, filePath: string) {
+export async function recognizeScreenshot(worker: Worker, filePath: string, trace?: OcrTrace) {
+  trace ??= [];
   const originalBuffer = await fs.readFile(filePath);
   const metadata = await sharp(originalBuffer).metadata();
   if (!metadata.width || !metadata.height) throw new Error('IMAGE_DIMENSIONS_UNREADABLE');
+  const content = await screenshotContentBounds(originalBuffer);
+  logOcr(trace, 'image', 'info', 'IMAGE_DECODED', { width: metadata.width, height: metadata.height, format: metadata.format });
   // Nei normali screenshot desktop il pannello usage occupa circa il 20% a sinistra.
   // Il ritaglio rimuove il testo estraneo che altera l'ordine OCR; sulle immagini
   // strette viene mantenuta l'intera larghezza.
@@ -168,17 +119,17 @@ export async function recognizeScreenshot(worker: Worker, filePath: string) {
   );
   const usageRegion = {
     left: 0,
-    top: 0,
+    top: content.top,
     width: regionWidth,
-    height: Math.min(metadata.height, Math.max(300, Math.round(metadata.height * 0.9))),
+    height: Math.min(content.height, Math.max(300, Math.round(content.height * 0.9))),
   };
   const timestampLeft = Math.max(0, Math.round(metadata.width * 0.72));
-  const timestampTop = Math.max(0, Math.round(metadata.height * 0.78));
+  const timestampTop = content.top + Math.round(content.height * 0.78);
   const timestampRegion = {
     left: timestampLeft,
     top: timestampTop,
     width: metadata.width - timestampLeft,
-    height: metadata.height - timestampTop,
+    height: content.top + content.height - timestampTop,
   };
   const [cropNormalized, cropNormalized4x, timestampNormalized, timestampSoft, timestampThreshold] = await Promise.all([
     sharp(originalBuffer)
@@ -229,16 +180,31 @@ export async function recognizeScreenshot(worker: Worker, filePath: string) {
     ['timestamp-soft', timestampSoft],
     ['timestamp-threshold', timestampThreshold],
   ] as const) {
-    const item = await timestampCandidate(worker, pass, input);
+    const item = await timestampCandidate(worker, pass, input, trace);
     if (item) timestampCandidates.push(item);
   }
   const timestampGroups = new Map<string, TimestampCandidate[]>();
+  const timestampHasAgreement = () => timestampCandidates.some((item) => timestampCandidates.filter((other) => other.capturedAt.getTime() === item.capturedAt.getTime()).length >= 2);
+  if (!timestampHasAgreement()) {
+    // Isolate the Windows clock from tray icons and taskbar text. Each added
+    // transform is a separate OCR pass, not a repeated vote for one result.
+    const clockBounds = { left: Math.floor(content.width * .92), top: content.top + Math.floor(content.height * .86),
+      width: content.width - Math.floor(content.width * .92), height: content.height - Math.floor(content.height * .86) };
+    for (const [pass, threshold] of [['timestamp-clock-soft', null], ['timestamp-clock-threshold', 155], ['timestamp-clock-threshold-low', 115]] as const) {
+      let crop = sharp(originalBuffer).extract(clockBounds).resize({ width: clockBounds.width * 4 }).grayscale();
+      crop = threshold === null ? crop.normalize().sharpen() : crop.threshold(threshold);
+      const item = await timestampCandidate(worker, pass, await crop.png().toBuffer(), trace);
+      if (item) timestampCandidates.push(item);
+      if (timestampHasAgreement()) break;
+    }
+  }
   for (const item of timestampCandidates) {
     const key = item.capturedAt.toISOString();
     timestampGroups.set(key, [...(timestampGroups.get(key) ?? []), item]);
   }
   const timestampAgreement = [...timestampGroups.values()].sort((a, b) => b.length - a.length)[0] ?? [];
   if (timestampAgreement.length < 2) {
+    logOcr(trace, 'timestamp', 'error', 'TIMESTAMP_NO_AGREEMENT', { requiredMatchingPasses: 2, validPasses: timestampCandidates.map((item) => item.pass) });
     return {
       accepted: false as const,
       reason: 'I passaggi OCR non concordano su data e ora visibili nello screenshot.',
@@ -250,6 +216,7 @@ export async function recognizeScreenshot(worker: Worker, filePath: string) {
     };
   }
   const capturedAt = timestampAgreement[0]!.capturedAt;
+  logOcr(trace, 'timestamp', 'info', 'TIMESTAMP_CONFIRMED', { capturedAt: capturedAt.toISOString(), matchingPasses: timestampAgreement.map((item) => item.pass) });
 
   const candidates: Candidate[] = [];
   await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
@@ -259,24 +226,40 @@ export async function recognizeScreenshot(worker: Worker, filePath: string) {
     filePath,
     usageRegion,
     capturedAt,
+    trace,
   );
   if (panelOriginal) candidates.push(panelOriginal);
   for (const [pass, input] of [
     ['left-panel-preprocessed', cropNormalized],
     ['left-panel-preprocessed-4x', cropNormalized4x],
   ] as const) {
-    const item = await candidate(worker, pass, input, capturedAt);
+    const item = await candidate(worker, pass, input, capturedAt, trace);
     if (item) candidates.push(item);
   }
   if (!hasUsageAgreement(candidates)) {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
-    const sparse = await candidate(worker, 'left-panel-sparse-text', cropNormalized, capturedAt);
+    const sparse = await candidate(worker, 'left-panel-sparse-text', cropNormalized, capturedAt, trace);
     if (sparse) candidates.push(sparse);
   }
   if (!hasUsageAgreement(candidates)) {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-    const fullImage = await candidate(worker, 'full-image-fallback', originalBuffer, capturedAt);
+    const fullImage = await candidate(worker, 'full-image-fallback', originalBuffer, capturedAt, trace);
     if (fullImage) candidates.push(fullImage);
+  }
+  if (!hasUsageAgreement(candidates) && trace.filter((event) => event.code === 'WEEKLY_RESET_NOT_VISIBLE').length < 2) {
+    // The old tooltip can extend beyond the narrow account panel. Isolate
+    // the counters and include that tooltip, without borrowing any values.
+    const detailsTop = content.top + Math.floor(content.height * .12);
+    const detailsRegion = { left: 0, top: detailsTop, width: Math.min(content.width, 600),
+      height: Math.min(220, content.top + content.height - detailsTop) };
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+    for (const scale of [3, 4]) {
+      const input = await sharp(originalBuffer).extract(detailsRegion).resize({ width: detailsRegion.width * scale })
+        .grayscale().normalize().sharpen().png().toBuffer();
+      const item = await candidate(worker, `usage-details-${scale}x`, input, capturedAt, trace);
+      if (item) candidates.push(item);
+      if (hasUsageAgreement(candidates)) break;
+    }
   }
 
   const groups = new Map<string, Candidate[]>();
@@ -286,13 +269,17 @@ export async function recognizeScreenshot(worker: Worker, filePath: string) {
   }
   const agreement = [...groups.values()].sort((a, b) => b.length - a.length)[0] ?? [];
   if (agreement.length < 2) {
+    logOcr(trace, 'usage', 'error', 'USAGE_NO_AGREEMENT', { requiredMatchingPasses: 2, validPasses: candidates.map((item) => item.pass) });
     return {
       accepted: false as const,
-      reason: 'I passaggi OCR non concordano sui valori di utilizzo e reset.',
+      reason: trace.filter((event) => event.code === 'WEEKLY_RESET_NOT_VISIBLE').length >= 2
+        ? 'La data del reset settimanale non è visibile o leggibile in almeno due passaggi. Apri il dettaglio del limite settimanale e acquisisci un nuovo screenshot.'
+        : 'I passaggi OCR non concordano sui valori di utilizzo e reset.',
       validation: { requiredMatchingPasses: 2, validPasses: candidates.map((item) => item.pass) },
     };
   }
   const selected = agreement.slice().sort((a, b) => b.confidence - a.confidence)[0]!;
+  logOcr(trace, 'usage', 'info', 'USAGE_CONFIRMED', { matchingPasses: agreement.map((item) => item.pass), ...selected.usage });
   return {
     accepted: true as const,
     usage: selected.usage,
@@ -361,25 +348,37 @@ async function refreshRecordStatus(recordId: string | null): Promise<void> {
 }
 
 export async function processUpload(worker: Worker, upload: UploadEntity): Promise<void> {
+  const trace: OcrTrace = [];
+  try { await processUploadWithDiagnostics(worker, upload, trace); }
+  catch (error) { throw new OcrDiagnosticError(error, trace); }
+}
+
+async function processUploadWithDiagnostics(worker: Worker, upload: UploadEntity, trace: OcrTrace): Promise<void> {
+  logOcr(trace, 'image', 'info', 'OCR_STARTED');
   const filePath = resolveStoredFile(upload.storageKey);
   const buffer = await fs.readFile(filePath);
   const imageSha256 = createHash('sha256').update(buffer).digest('hex');
-  const result = await recognizeScreenshot(worker, filePath);
+  logOcr(trace, 'image', 'info', 'IMAGE_HASHED', { sha256: imageSha256 });
+  const result = await recognizeScreenshot(worker, filePath, trace);
   if (createHash('sha256').update(await fs.readFile(filePath)).digest('hex') !== imageSha256) {
     throw new Error('IMAGE_CHANGED_DURING_OCR');
   }
   if (!result.accepted) {
-    await archiveOcrFailure(AppDataSource, upload.id, result.reason, 'MANUAL_REVIEW', imageSha256);
+    await archiveOcrFailure(AppDataSource, upload.id, result.reason, 'MANUAL_REVIEW', imageSha256, false, trace);
     if (upload.role !== 'SINGLE' && upload.recordId) await settleFailedPair(AppDataSource, upload.recordId);
     else await refreshRecordStatus(upload.recordId);
     return;
   }
 
   const models = await AppDataSource.getRepository(AiModelEntity).find({ where: { ownerId: upload.ownerId, catalogAvailable: true, supersededAt: IsNull() } });
-  const selector = await recognizeModelSelector(worker, filePath, models);
+  const selector = await recognizeModelSelector(worker, filePath, models, trace);
   const modelTag = selector.status === 'MATCHED' ? selector : null;
   if (!modelTag || (upload.modelId && upload.modelId !== modelTag.modelId)) {
-    await archiveOcrFailure(AppDataSource, upload.id, !modelTag ? modelSelectorFailure(selector) : 'Il modello letto contraddice il tag OCR originale, che è immutabile.', 'MANUAL_REVIEW', imageSha256);
+    if (modelTag) logOcr(trace, 'model', 'error', 'IMMUTABLE_MODEL_CONFLICT', { expectedModelId: upload.modelId, modelId: modelTag.modelId });
+    const expected = models.find((model) => model.id === upload.modelId);
+    const actual = models.find((model) => model.id === modelTag?.modelId);
+    await archiveOcrFailure(AppDataSource, upload.id, !modelTag ? modelSelectorFailure(selector)
+      : `Il modello letto (${actual?.name ?? 'modello diverso'}, ${actual?.reasoning ?? ''}) contraddice il tag OCR originale (${expected?.name ?? 'modello archiviato'}, ${expected?.reasoning ?? ''}), che è immutabile. Per una nuova sessione usa un nuovo numero di coppia.`, 'MANUAL_REVIEW', imageSha256, false, trace);
     if (upload.role !== 'SINGLE' && upload.recordId) await settleFailedPair(AppDataSource, upload.recordId);
     else await refreshRecordStatus(upload.recordId);
     return;
@@ -390,7 +389,7 @@ export async function processUpload(worker: Worker, upload: UploadEntity): Promi
     await stagePairOcr(AppDataSource, upload, {
       sha256: imageSha256, capturedAt: result.capturedAt.toISOString(), confidence: result.confidence, modelId: modelTag.modelId,
       usage: { ...result.usage, fiveHourResetsAt: result.usage.fiveHourResetsAt.toISOString() },
-      validation: result.validation, modelMatchingPasses: modelTag.matchingPasses,
+      validation: result.validation, modelMatchingPasses: modelTag.matchingPasses, diagnostics: trace,
     });
     return;
   }
@@ -446,17 +445,22 @@ export async function processUpload(worker: Worker, upload: UploadEntity): Promi
 
 // Enrich historical validated screenshots without rewriting their usage data.
 export async function tagHistoricalUpload(worker: Worker, upload: UploadEntity) {
+  const trace: OcrTrace = [];
+  try { await tagHistoricalWithDiagnostics(worker, upload, trace); }
+  catch (error) { throw error instanceof OcrDiagnosticError ? error : new OcrDiagnosticError(error, trace); }
+}
+async function tagHistoricalWithDiagnostics(worker: Worker, upload: UploadEntity, trace: OcrTrace) {
   if (upload.storageKey.includes('/unprocessed/')) return processUpload(worker, upload);
   const filePath = resolveStoredFile(upload.storageKey);
   const before = createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
   if (upload.sha256 && upload.sha256 !== before) throw new Error('IMAGE_HASH_CHANGED');
   const models = await AppDataSource.getRepository(AiModelEntity).find({ where: { ownerId: upload.ownerId, catalogAvailable: true, supersededAt: IsNull() } });
-  const selector = await recognizeModelSelector(worker, filePath, models);
+  const selector = await recognizeModelSelector(worker, filePath, models, trace);
   const tag = selector.status === 'MATCHED' ? selector : null;
   const after = createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
   if (before !== after) throw new Error('IMAGE_CHANGED_DURING_OCR');
   if (!tag) {
-    await archiveOcrFailure(AppDataSource, upload.id, modelSelectorFailure(selector), 'MANUAL_REVIEW');
+    await archiveOcrFailure(AppDataSource, upload.id, modelSelectorFailure(selector), 'MANUAL_REVIEW', undefined, false, trace);
     if (upload.role !== 'SINGLE' && upload.recordId) await settleFailedPair(AppDataSource, upload.recordId);
     else await refreshRecordStatus(upload.recordId);
     return;
@@ -502,6 +506,7 @@ async function main() {
     while (!stopping) {
       if (Date.now() - lastScan >= 5000) {
         lastScan = Date.now();
+        try { await recoverProjectFolders(AppDataSource); } catch { console.error('PROJECT_FOLDER_RECOVERY_FAILED'); }
         const projects = await AppDataSource.getRepository(ProjectEntity).find();
         for (const project of projects) {
           try { await scanProjectInbox(AppDataSource, project); }
@@ -519,8 +524,10 @@ async function main() {
         if (historical) await tagHistoricalUpload(worker, upload);
         else await processUpload(worker, upload);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'UNKNOWN_ERROR';
-        await archiveOcrFailure(AppDataSource, upload.id, message.slice(0, 500), 'FAILED');
+        const diagnostic = technicalOcrError(error);
+        const trace = error instanceof OcrDiagnosticError ? error.events : [];
+        logOcr(trace, 'processing', 'error', diagnostic.code, { errorName: diagnostic.errorName, frames: diagnostic.frames });
+        await archiveOcrFailure(AppDataSource, upload.id, diagnostic.code, 'FAILED', undefined, false, trace);
         if (upload.role !== 'SINGLE' && upload.recordId) await settleFailedPair(AppDataSource, upload.recordId);
         await refreshRecordStatus(upload.recordId);
       }

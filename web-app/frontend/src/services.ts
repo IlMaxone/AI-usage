@@ -2,7 +2,7 @@ import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
 import { tap } from 'rxjs';
 import { API_URL } from './api-url';
-import { AiModel, AuthResponse, CostAnalysis, Dashboard, GalleryUpload, Project, UsageRecord, User, OcrFailureNotification } from './types';
+import { AiModel, AuthResponse, CostAnalysis, Dashboard, GalleryUpload, Project, UsageRecord, User, OcrFailureNotification, OcrDebugReport } from './types';
 
 const TOKEN_KEY = 'ai-usage-token';
 const USER_KEY = 'ai-usage-user';
@@ -35,6 +35,8 @@ export const authInterceptor: HttpInterceptorFn = (request, next) => {
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   ocrFailures() { return this.http.get<OcrFailureNotification[]>(`${API_URL}/notifications/ocr-failures`); }
+  ocrDebug() { return this.http.get<OcrDebugReport>(`${API_URL}/notifications/ocr-failures/debug`); }
+  retryOcrFailures() { return this.http.post<{ queued: number; skipped: number; busy: boolean; issues: Array<{ notificationId: string; code: string; reason: string }> }>(`${API_URL}/notifications/ocr-failures/retry`, {}); }
   private readonly http = inject(HttpClient);
   dashboard() { return this.http.get<Dashboard>(`${API_URL}/dashboard`); }
   projects() { return this.http.get<Project[]>(`${API_URL}/projects`); }
