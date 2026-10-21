@@ -34,6 +34,16 @@ Non si assegna un modello predefinito. Modello e reasoning taggati non sono
 modificabili; una rilettura contraddittoria richiede verifica manuale. Una coppia
 con tag diversi non riceve un costo attribuito arbitrariamente a uno dei due.
 
+Un'eccezione esplicita riguarda una coppia fallita perché le due immagini
+mostrano modelli diversi: nel Profilo si può scegliere una delle due varianti,
+salvare e premere Riprova. È una dichiarazione dell'utente sull'attribuzione
+economica dell'intera sessione, non una correzione del testo riconosciuto.
+Entrambi i modelli OCR originali restano nella diagnostica; i nuovi snapshot
+riportano `modelSource=USER_CHOICE`, la scelta e il timestamp. Archivio e
+analisi costi la segnalano come manuale. Il modello scelto diventa immutabile
+alla convalida e non può contraddire tag già assegnati. Tutti i controlli sui
+valori restano obbligatori. Vedere il [flusso nel Profilo](interfaccia-stati.md).
+
 Il prefisso GPT può mancare nel selettore: `5.6 Sol Alto` corrisponde a
 GPT-5.6 Sol high. `6 Astra` e `6.0 Astra` sono equivalenti; 6.1 resta distinto.
 L'OCR controlla il selettore e, quando necessario, una seconda zona più stretta;

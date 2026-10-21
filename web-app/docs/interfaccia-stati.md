@@ -90,4 +90,26 @@ gli avvisi prima del successo. Nel debug, l'indicazione dell'ultima lettura
 valida conservata distingue l'archivio dal tentativo fallito. Consultare la
 [diagnosi OCR](diagnosi-ocr-2026-10-21.md) per i casi storici senza riferimenti.
 
+Accanto a **Riprova**, **Reset** elimina definitivamente i tentativi falliti
+dell'utente: alert, cronologia diagnostica, foto problematiche e record mai
+convalidati. Include i file orfani in `unprocessed` dei progetti interessati.
+Prima dell'operazione mostra una conferma con il numero degli alert. Non sposta
+le foto in `deleted`: questa pulizia è definitiva. Le ultime letture valide,
+le relative foto e i tag OCR restano conservati. Le stesse coppie A/B e i file
+singoli possono essere caricati nuovamente. Se un tentativo è già accodato o
+in elaborazione, il reset viene rifiutato senza cancellare dati.
+
+Per l'errore **modelli/reasoning diversi nella coppia**, ogni alert mostra un
+menu con le due varianti riconosciute. Scegliere il modello da attribuire a
+entrambe le immagini, premere **Salva** e poi **Riprova**. Salvare non avvia
+l'OCR e non chiude l'alert. Il menu non modifica un tag già assegnato.
+
+Il worker riconosce nuovamente entrambe le immagini e applica la scelta solo
+se i modelli letti rientrano nelle due alternative iniziali. Timestamp, usage,
+reset e accordo fra passaggi restano obbligatori. Uno screenshot illeggibile o
+senza reset settimanale non viene completato tramite questa scelta.
+L'Archivio e l'Analisi usage distinguono **Modello dichiarato manualmente**
+dall'attribuzione OCR. Il log conserva i modelli realmente letti, la scelta
+salvata e il momento del salvataggio. Le tariffe rimangono quelle del CSV.
+
 Torna all'[indice](README.md).

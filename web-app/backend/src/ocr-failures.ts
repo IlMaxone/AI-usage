@@ -1,16 +1,21 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { IsUUID } from 'class-validator';
 import { InjectRepository } from '@nestjs/typeorm';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
 import { AuthUser, CurrentUser } from './common';
-import { AuditEventEntity, OcrFailureNotificationEntity, ProjectEntity, UploadEntity, UsageRecordEntity, UsageSnapshotEntity } from './entities';
+import { AiModelEntity, AuditEventEntity, OcrFailureNotificationEntity, ProjectEntity, UploadEntity, UsageRecordEntity, UsageSnapshotEntity } from './entities';
 import { ensureProjectFolders, projectFolderName, relativeStorageKey, resolveStoredFile } from './storage';
 import { pairIdentity } from './inbox';
 import { FileMove, moveFile, rollbackMoves } from './file-moves';
 import { buildOcrDebugReport, logOcr, makeAttempt, OcrTrace, technicalOcrError } from './ocr-diagnostics';
 import { retryOcrFailures } from './ocr-retry';
+import { resetOcrFailures } from './ocr-reset';
+import { failureModelOptions, saveFailureModelChoice } from './ocr-model-choice';
+
+class FailureModelChoiceDto { @IsUUID() modelId!: string }
 
 export const isLegacyDuplicateNotice = (reason: string) => /^Immagine già registrata; nessun nuovo snapshot creato\./i.test(reason.trim());
 
@@ -192,9 +197,18 @@ export class OcrFailureNotificationsController {
   async retry(@CurrentUser() user: AuthUser) {
     return retryOcrFailures(this.notifications.manager.connection, user.id);
   }
+  @Post('reset')
+  async reset(@CurrentUser() user: AuthUser) {
+    return resetOcrFailures(this.notifications.manager.connection, user.id);
+  }
+  @Patch(':id/model-choice')
+  async chooseModel(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: FailureModelChoiceDto) {
+    return saveFailureModelChoice(this.notifications.manager.connection, user.id, id, dto.modelId);
+  }
   private async load(user: AuthUser, includeDiagnostics: boolean) {
     const notifications = await this.notifications.find({ where: { ownerId: user.id, resolvedAt: IsNull() }, order: { createdAt: 'DESC' } });
     if (!notifications.length) return [];
+    const models = await this.notifications.manager.findBy(AiModelEntity, { ownerId: user.id, catalogAvailable: true, supersededAt: IsNull() });
     const [projects, uploads] = await Promise.all([
       this.projects.find({ where: { ownerId: user.id, id: In([...new Set(notifications.map((n) => n.projectId))]) }, withDeleted: true }),
       this.uploads.find({ where: { ownerId: user.id, id: In(notifications.map((n) => n.uploadId)) } }),
@@ -211,7 +225,8 @@ export class OcrFailureNotificationsController {
         try { await fs.access(resolveStoredFile(key)); available = true; } catch {}
         return { ...attempt, fileAvailable: available };
       })) : undefined;
-      return { ...summary, ...(includeDiagnostics ? { diagnostics: detailed } : {}), project: project ? { id: project.id, name: project.name, folder: `projects/${projectFolderName(project)}/unprocessed` } : null,
+      const modelOptions = failureModelOptions(notification, models).map(({ id, name, reasoning }) => ({ id, name, reasoning }));
+      return { ...summary, modelOptions, ...(includeDiagnostics ? { diagnostics: detailed } : {}), project: project ? { id: project.id, name: project.name, folder: `projects/${projectFolderName(project)}/unprocessed` } : null,
         status: upload?.status ?? 'FAILED', fileAvailable };
     }));
   }

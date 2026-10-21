@@ -44,6 +44,7 @@ export function makeAttempt(upload: { id: string; originalName: string; role: st
 }
 
 interface DebugNotice {
+  modelChoice?: unknown;
   id: string; originalName: string; reason: string; files: string[]; createdAt: Date | string; pairNumber: string | null;
   status: string; fileAvailable: boolean; diagnostics?: OcrAttemptDiagnostic[];
   project: { id: string; name: string; folder: string } | null;
@@ -57,6 +58,7 @@ export function buildOcrDebugReport(notifications: DebugNotice[]) {
       const latest = history.at(-1);
       const detailed = history.some((attempt) => attempt.events.some((event) => !['LEGACY_FAILURE', 'FAILURE_PINNED', 'FAILURE_RECORDED'].includes(event.code)));
       return { immagine: name, progetto: notice.project?.name ?? 'Progetto non disponibile', progetto_id: notice.project?.id ?? null,
+        scelta_modello_utente: notice.modelChoice ?? null,
         notifica_id: notice.id, coppia: notice.pairNumber, immagini_associate: notice.files,
         stato: latest?.status ?? (notice.status === 'VALIDATED' ? 'MANUAL_REVIEW' : notice.status), motivo: notice.reason,
         stato_rilevazione_attuale: notice.status, ultima_lettura_valida_conservata: notice.status === 'VALIDATED',

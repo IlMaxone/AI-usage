@@ -48,7 +48,7 @@ export async function retryOcrFailures(source: DataSource, ownerId: string) {
           images.push({ filePath: destination, originalName, role: notice.pairNumber ? pairIdentity(originalName)!.role : 'SINGLE',
             mime: /\.png$/i.test(originalName) ? 'image/png' : /\.webp$/i.test(originalName) ? 'image/webp' : 'image/jpeg', size: stat.size });
         }
-        await importRecord(source, project, images, null, true);
+        await importRecord(source, project, images, null, true, false, notice.modelChoice);
         temporary.length = 0; // The queue now owns these private input copies.
         result.queued++;
         await source.getRepository(AuditEventEntity).save({ ownerId, action: 'OCR_FAILURE_RETRY_QUEUED', entityType: 'ocr_failure_notification', entityId: notice.id,

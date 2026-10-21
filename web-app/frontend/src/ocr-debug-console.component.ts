@@ -44,6 +44,7 @@ export class OcrDebugConsoleComponent implements AfterViewInit, OnDestroy {
       lines.push(`>>> ${item.progetto} / ${item.immagine}`, `stato: ${item.stato}`, `motivo: ${item.motivo}`,
         `file: ${item.file_disponibile ? 'disponibile' : 'non disponibile'} · coppia: ${item.coppia ?? 'singola'}`, `cartella: ${item.cartella ?? 'non disponibile'}`);
       if (item.ultima_lettura_valida_conservata) lines.push('# L’ultima lettura valida è conservata in archivio; l’errore riguarda il nuovo tentativo.');
+      if (item.scelta_modello_utente) lines.push(`# Scelta manuale salvata: ${item.scelta_modello_utente.modelId} · ${item.scelta_modello_utente.chosenAt}`);
       for (const attempt of item.tentativi) {
         lines.push(`--- ${attempt.data} · ${attempt.ruolo} · ${attempt.stato}`, `sha256: ${attempt.sha256 ?? 'non calcolato'}`);
         for (const event of attempt.log) lines.push(`[${event.at}] [${event.level.toUpperCase()}] ${event.stage} / ${event.code} ${JSON.stringify(event.details)}`);

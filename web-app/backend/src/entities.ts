@@ -137,10 +137,12 @@ export class UsageRecordEntity {
 
 export type UploadRole = 'SINGLE' | 'START' | 'END';
 export type UploadStatus = 'DRAFT' | 'UPLOADED' | 'PROCESSING' | 'VALIDATED' | 'MANUAL_REVIEW' | 'FAILED';
+export interface OcrModelChoice { modelId: string; observedModelIds: string[]; notificationId: string; chosenAt: string; source: 'USER_CHOICE' }
 
 @Entity('uploads')
 @Index(['ownerId', 'projectId', 'sha256'], { where: 'sha256 IS NOT NULL' })
 export class UploadEntity {
+  @Column({ name: 'model_choice', type: 'jsonb', nullable: true }) modelChoice!: OcrModelChoice | null;
   @Column({ name: 'pending_ocr', type: 'jsonb', nullable: true }) pendingOcr!: Record<string, unknown> | null;
   @Column({ name: 'prior_upload', type: 'jsonb', nullable: true }) priorUpload!: Record<string, unknown> | null;
   @PrimaryGeneratedColumn('uuid') id!: string;
@@ -247,6 +249,7 @@ export class AuditEventEntity {
 
 @Entity('ocr_failure_notifications')
 export class OcrFailureNotificationEntity {
+  @Column({ name: 'model_choice', type: 'jsonb', nullable: true }) modelChoice!: OcrModelChoice | null;
   @Column({ type: 'jsonb', default: () => "'[]'::jsonb" }) diagnostics!: OcrAttemptDiagnostic[];
   @Column({ name: 'storage_key', type: 'varchar', length: 255 }) storageKey!: string;
   @Column({ name: 'pair_number', type: 'varchar', length: 255, nullable: true }) pairNumber!: string | null;

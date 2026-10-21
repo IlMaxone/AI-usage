@@ -3,6 +3,7 @@ export interface OcrDebugEvent { at: string; stage: string; level: string; code:
 export interface OcrDebugReport {
   immagini_infette: Array<{ immagine: string; progetto: string; progetto_id: string | null; notifica_id: string; stato: string }>;
   logs_errori: Array<{
+    scelta_modello_utente?: { modelId: string; chosenAt: string; source: 'USER_CHOICE' } | null;
     immagine: string; progetto: string; notifica_id: string; coppia: string | null; immagini_associate: string[];
     stato: string; stato_rilevazione_attuale?: string; ultima_lettura_valida_conservata?: boolean; motivo: string; cartella: string | null; file_disponibile: boolean; sha256: string | null; dettaglio_disponibile: boolean;
     tentativi: Array<{ id: string; data: string; ruolo: string; stato: string; sha256: string | null; log: OcrDebugEvent[] }>;
@@ -11,6 +12,8 @@ export interface OcrDebugReport {
   metadata: { formato: string; versione: number; esportato_il: string; numero_immagini: number; testo_ocr_completo_incluso: boolean };
 }
 export interface OcrFailureNotification {
+  modelOptions?: Array<{ id: string; name: string; reasoning: string }>;
+  modelChoice?: { modelId: string; chosenAt: string } | null;
   id: string; originalName: string; files: string[]; reason: string; createdAt: string;
   project: { id: string; name: string; folder: string } | null;
   fileAvailable: boolean; pairNumber: string | null;
@@ -34,6 +37,7 @@ export interface UsageResult {
   alignment?: { fiveHourResetOffsetMinutes: number; weeklyResetSignal: 'SAME_WINDOW' | 'ROLLOVER' | 'SHIFTED' | 'UNAVAILABLE' };
 }
 export interface UsageSnapshot {
+  validation?: { modelSource?: 'OCR' | 'USER_CHOICE' };
   capturedAt: string;
   fiveHourRemainingPct: number; fiveHourUsedPct: number; fiveHourResetsAt: string;
   weeklyRemainingPct: number; weeklyUsedPct: number; weeklyResetsOn: string;
@@ -62,6 +66,7 @@ export interface DashboardRecord {
   } | null;
 }
 export interface CostAnalysisItem {
+  modelSource?: 'OCR' | 'USER_CHOICE';
   recordId: string; project: Project | null; mode: 'CONSTANT' | 'SEGMENT'; capturedAt: string;
   fiveHourResetsAt: string | null; usedPct: number; attributedUsedPct: number; elapsedMinutes: number | null;
   windowCostAt100: number; usageMinutesAt100: number | null; estimatedCost: number | null;

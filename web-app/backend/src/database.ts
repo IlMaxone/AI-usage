@@ -16,6 +16,7 @@ import { OcrFailureNotifications1726500000011 } from './migrations/1726500000011
 import { ReadableProjectFolders1726500000012 } from './migrations/1726500000012-readable-project-folders';
 import { OcrErrorDiagnostics1726500000013 } from './migrations/1726500000013-ocr-error-diagnostics';
 import { PrivateProjectFolders1726500000014 } from './migrations/1726500000014-private-project-folders';
+import { OcrModelChoice1726500000015 } from './migrations/1726500000015-ocr-model-choice';
 
 export function databaseOptions(migrationsRun = false) {
   const url = process.env.DATABASE_URL;
@@ -40,6 +41,7 @@ export function databaseOptions(migrationsRun = false) {
       ReadableProjectFolders1726500000012,
       OcrErrorDiagnostics1726500000013,
       PrivateProjectFolders1726500000014,
+      OcrModelChoice1726500000015,
     ],
     migrationsRun,
     synchronize: false,

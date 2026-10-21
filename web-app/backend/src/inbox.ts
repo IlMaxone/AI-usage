@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { DataSource } from 'typeorm';
-import { AuditEventEntity, ProjectEntity, UploadEntity, UploadRole, UsageRecordEntity } from './entities';
+import { AuditEventEntity, OcrModelChoice, ProjectEntity, UploadEntity, UploadRole, UsageRecordEntity } from './entities';
 import { ensureProjectFolders, projectFolderName, relativeStorageKey, resolveStoredFile, uploadDir } from './storage';
 import { ImageArchive, restoreArchive } from './deleted';
 
@@ -38,7 +38,7 @@ export interface ImportImage { filePath: string; originalName: string; role: Upl
 // so a browser upload and an inbox scan cannot create the same record twice.
 export async function importRecord(
   source: DataSource, project: ProjectEntity, images: ImportImage[], note: string | null,
-  queued: boolean, skipUnchanged = false,
+  queued: boolean, skipUnchanged = false, modelChoice: OcrModelChoice | null = null,
 ): Promise<UsageRecordEntity | null> {
   const inspected = await Promise.all(images.map(async (image) => {
     const stat = await fs.lstat(image.filePath);
@@ -93,6 +93,7 @@ export async function importRecord(
       // In a pending pair, do not repeatedly requeue its already archived partner.
       if (skipUnchanged && upload?.inboxFingerprint === image.fingerprint) continue;
       const values = {
+        modelChoice,
         originalName: image.originalName.slice(0, 255), storageKey: relativeStorageKey(image.filePath),
         sha256: image.hash, mime: image.mime, size: image.size, inboxFingerprint: image.fingerprint,
         status: queued ? 'UPLOADED' as const : 'DRAFT' as const, reviewReason: null, processedAt: null,

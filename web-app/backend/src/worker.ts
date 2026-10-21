@@ -17,6 +17,7 @@ import { logOcr, OcrDiagnosticError, OcrTrace, technicalOcrError } from './ocr-d
 import { screenshotContentBounds } from './ocr-geometry';
 import { parseUsage, ParsedUsage } from './ocr-usage';
 import { recoverProjectFolders } from './project-recovery';
+import { applyFailureModelChoice } from './ocr-model-choice';
 
 interface Candidate {
   pass: string;
@@ -372,7 +373,7 @@ async function processUploadWithDiagnostics(worker: Worker, upload: UploadEntity
 
   const models = await AppDataSource.getRepository(AiModelEntity).find({ where: { ownerId: upload.ownerId, catalogAvailable: true, supersededAt: IsNull() } });
   const selector = await recognizeModelSelector(worker, filePath, models, trace);
-  const modelTag = selector.status === 'MATCHED' ? selector : null;
+  const modelTag = applyFailureModelChoice(upload, selector, models, trace);
   if (!modelTag || (upload.modelId && upload.modelId !== modelTag.modelId)) {
     if (modelTag) logOcr(trace, 'model', 'error', 'IMMUTABLE_MODEL_CONFLICT', { expectedModelId: upload.modelId, modelId: modelTag.modelId });
     const expected = models.find((model) => model.id === upload.modelId);
@@ -389,7 +390,8 @@ async function processUploadWithDiagnostics(worker: Worker, upload: UploadEntity
     await stagePairOcr(AppDataSource, upload, {
       sha256: imageSha256, capturedAt: result.capturedAt.toISOString(), confidence: result.confidence, modelId: modelTag.modelId,
       usage: { ...result.usage, fiveHourResetsAt: result.usage.fiveHourResetsAt.toISOString() },
-      validation: result.validation, modelMatchingPasses: modelTag.matchingPasses, diagnostics: trace,
+      validation: { ...result.validation, modelSource: upload.modelChoice ? 'USER_CHOICE' : 'OCR',
+        ...(upload.modelChoice ? { modelChoice: upload.modelChoice, ocrModelId: selector.status === 'MATCHED' ? selector.modelId : null } : {}) }, modelMatchingPasses: modelTag.matchingPasses, diagnostics: trace,
     });
     return;
   }

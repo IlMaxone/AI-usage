@@ -117,6 +117,7 @@ export class CostAnalysisController {
         fiveHourResetsAt: (record.mode === 'SEGMENT' ? end?.fiveHourResetsAt : single?.fiveHourResetsAt) ?? null,
         elapsedMinutes: from && to ? round(Math.max(0, (new Date(to).getTime() - new Date(from).getTime()) / 60000), 2) : null,
         sourceModel: source ? describe(source) : null,
+        modelSource: requiredIds.some((id) => snapshotByUpload.get(id)?.validation?.modelSource === 'USER_CHOICE') ? 'USER_CHOICE' : 'OCR',
         tagStatus: tags.some((tag) => !tag) ? 'UNTAGGED' : !source ? 'MODEL_MISMATCH' : !source.catalogAvailable ? 'UNAVAILABLE' : 'TAGGED',
       }];
     });

@@ -40,9 +40,10 @@ record.usage.status = 'SEGMENT_MEASURED';
 const gallery = [record.start, record.end].map((reading) => ({ ...reading.upload, project, mime: 'image/svg+xml', size: 500, capturedAt: snapshot.capturedAt, recordDeleted: false }));
 let writes = 0;
 let retryRequests = 0;
-const notificationCount = Math.min(150, Math.max(0, Number(process.env.UI_FIXTURE_NOTIFICATION_COUNT ?? 1)));
+let resetRequests = 0;
+let notificationCount = Math.min(150, Math.max(0, Number(process.env.UI_FIXTURE_NOTIFICATION_COUNT ?? 1)));
 const api = (url) => {
-  if (url.pathname === '/qa/stats') return { writes, retryRequests };
+  if (url.pathname === '/qa/stats') return { writes, retryRequests, resetRequests };
   if (url.pathname === '/api/projects') return [project];
   if (url.pathname === '/api/notifications/ocr-failures/debug') {
     const images = notificationCount ? ['B2.png', 'A2.png'] : [];
@@ -78,6 +79,11 @@ const api = (url) => {
   return undefined;
 };
 const server = http.createServer(async (request, response) => {
+  if (request.method === 'POST' && request.url === '/api/notifications/ocr-failures/reset') {
+    request.resume(); resetRequests++;
+    const notifications = notificationCount; notificationCount = 0;
+    response.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({ notifications, images: notifications ? 2 : 0, records: 0, preservedReadings: 1 })); return;
+  }
   if (request.method === 'POST' && request.url === '/api/notifications/ocr-failures/retry') {
     request.resume(); retryRequests++;
     response.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({ queued: 1, skipped: 0, busy: false, issues: [] })); return;

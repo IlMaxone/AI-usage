@@ -90,6 +90,19 @@ utenti, metadati firmati, eliminazione senza ricreazione e foto HTML separate.
 Da `web-app`, `node --test scripts/project-path.test.mjs` verifica i percorsi
 usati dal selettore Windows senza aprire una finestra nativa.
 
+`/checks/ocr-reset-smoke.cjs` verifica il reset degli errori su database e file
+inventati: coppie e singoli, rimozione delle foto orfane e dei log, conservazione
+dell'ultima lettura valida, isolamento fra account, blocco durante l'OCR,
+rollback di una cancellazione interrotta, recupero dopo riavvio, idempotenza e
+nuovo caricamento degli stessi nomi. Il reset usa un'area temporanea firmata;
+all'avvio un'operazione SQL annullata ripristina i file, mentre una già conclusa
+completa la loro cancellazione. Non si conserva un archivio degli errori resettati.
+
+L'integrazione principale verifica anche il flusso modello discordante: menu
+limitato alle due varianti osservate, salvataggio separato dal retry, controlli
+di proprietario e immutabilità, applicazione atomica A/B, conservazione dei
+modelli realmente letti e distinzione della scelta manuale nei costi.
+
 Il tema applicato è Warm Workbench. Il [mockup alternativo conservato](../mockups/03-aurora-glass.html)
 è solo un riferimento. Per una verifica grafica con dati inventati è disponibile
 [ui-fixture.mjs](../scripts/ui-fixture.mjs), che usa la build locale su porta 4411

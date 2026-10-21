@@ -467,8 +467,54 @@ const sharp = appRequire('sharp');
       assert.equal(await repo(e.UploadEntity).countBy({ projectId: orphanProject.id }), 0);
       assert.ok((await fs.readFile(resolveStoredFile(orphanKey))).equals(a));
       assert.ok((await fs.readFile(path.join(orphanRoot, 'unprocessed', unknownPartner + '.png'))).equals(b));
+      // A saved choice may reconcile two recognized models for a failed pair,
+      // without pretending the OCR read the chosen model in both screenshots.
+      const choiceProject = await (await createProject('Manual model choice')).json();
+      const choiceImages = async () => {
+        const images = [];
+        for (const [name, role, data] of [['A77.png', 'START', a], ['B77.png', 'END', b]]) {
+          const filePath = resolveStoredFile(`${choiceProject.storageFolder}/to-process/${randomUUID()}.png`);
+          await fs.writeFile(filePath, data); images.push({ filePath, originalName: name, role, mime: 'image/png', size: data.length });
+        }
+        return importRecord(ds, choiceProject, images, null, true);
+      };
+      const processChoicePair = async () => {
+        for (const upload of await repo(e.UploadEntity).findBy({ projectId: choiceProject.id, status: 'UPLOADED' })) {
+          await processUpload(fakeWorker(upload.role === 'END' ? 60 : 80, true, upload.role === 'END' ? 'GPT-6 Astra Alto' : 'GPT-5.6 Sol Alto'), upload);
+        }
+      };
+      await choiceImages(); await processChoicePair();
+      const choiceNotices = await fetch(baseUrl + '/api/notifications/ocr-failures', { headers: { authorization } }).then((response) => response.json());
+      const choiceNotice = choiceNotices.find((notice) => notice.project.id === choiceProject.id);
+      assert.ok(choiceNotice, 'The discordant pair must leave a pinned alert');
+      assert.equal(choiceNotice.modelOptions.length, 2); assert.equal(choiceNotice.modelChoice, null);
+      assert.equal(await repo(e.UsageRecordEntity).countBy({ projectId: choiceProject.id }), 0);
+      const solChoice = choiceNotice.modelOptions.find((option) => option.name === 'GPT-5.6 Sol');
+      const astraChoice = choiceNotice.modelOptions.find((option) => option.name === 'GPT-6 Astra');
+      const choiceRequest = (modelId, auth = authorization) => fetch(baseUrl + `/api/notifications/ocr-failures/${choiceNotice.id}/model-choice`, { method: 'PATCH', headers: { authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ modelId }) });
+      assert.equal((await choiceRequest(solChoice.id, 'Bearer ' + registered.accessToken)).status, 404);
+      assert.equal((await choiceRequest(randomUUID())).status, 400);
+      assert.equal((await choiceRequest(solChoice.id)).status, 200);
+      assert.equal(await repo(e.UsageRecordEntity).countBy({ projectId: choiceProject.id }), 0); // Saving alone never queues or validates.
+      await retryRequest();
+      const choiceQueue = await repo(e.UploadEntity).findBy({ projectId: choiceProject.id }); assert.equal(choiceQueue.length, 2);
+      assert.ok(choiceQueue.every((upload) => upload.modelChoice.modelId === solChoice.id));
+      assert.equal((await choiceRequest(astraChoice.id)).status, 409);
+      await processChoicePair();
+      const chosenRecord = await repo(e.UsageRecordEntity).findOneByOrFail({ projectId: choiceProject.id }); assert.equal(chosenRecord.status, 'VALIDATED');
+      const chosenUploads = await repo(e.UploadEntity).findBy({ projectId: choiceProject.id }); assert.ok(chosenUploads.every((upload) => upload.modelId === solChoice.id));
+      const chosenSnapshots = await repo(e.UsageSnapshotEntity).findBy({ uploadId: appRequire('typeorm').In(chosenUploads.map((upload) => upload.id)) });
+      assert.equal(chosenSnapshots.length, 2); assert.ok(chosenSnapshots.every((snapshot) => snapshot.validation.modelSource === 'USER_CHOICE'));
+      assert.deepEqual(new Set(chosenSnapshots.map((snapshot) => snapshot.validation.ocrModelId)), new Set([solChoice.id, astraChoice.id]));
+      assert.ok((await repo(e.OcrFailureNotificationEntity).findOneByOrFail({ id: choiceNotice.id })).resolvedAt);
+      const chosenCosts = await fetch(baseUrl + '/api/cost-analysis?projectId=' + choiceProject.id, { headers: { authorization } }).then((response) => response.json());
+      assert.equal(chosenCosts.items[0].modelSource, 'USER_CHOICE'); assert.ok(chosenCosts.items[0].estimatedCost > 0);
+      // Even a later open mismatch cannot alter an already assigned tag.
+      await repo(e.OcrFailureNotificationEntity).update(choiceNotice.id, { resolvedAt: null });
+      assert.equal((await choiceRequest(astraChoice.id)).status, 409);
+      assert.ok((await repo(e.UploadEntity).findBy({ projectId: choiceProject.id })).every((upload) => upload.modelId === solChoice.id));
     } finally { await app.close(); }
-    console.log('PASS: CSV startup sync, price recalculation, stable OCR tags, available-only analyses, atomic rollback, idempotence, new-account catalog, folder and deleted workflows.');
+    console.log('PASS: CSV startup sync, price recalculation, stable OCR tags, available-only analyses, atomic rollback, idempotence, new-account catalog, folder/deleted workflows and explicit pair model choices.');
   } finally {
     if (ds?.isInitialized) await ds.destroy();
     await admin.query(`DROP DATABASE "${database}" WITH (FORCE)`);

@@ -13,6 +13,7 @@ import { ModelCatalogService } from './model-catalog';
 import { recoverOcrFailures } from './ocr-failures';
 import { migrateOwnedProjectFolders } from './project-folders';
 import { recoverProjectFolders } from './project-recovery';
+import { recoverOcrResets } from './ocr-reset';
 
 async function bootstrap() {
   await fs.mkdir(uploadDir, { recursive: true });
@@ -20,6 +21,7 @@ async function bootstrap() {
   await app.get(ModelCatalogService).loadAndSync();
   await migrateOwnedProjectFolders(app.get(DataSource));
   await recoverProjectFolders(app.get(DataSource));
+  await recoverOcrResets(app.get(DataSource));
   await migrateProjectStorage(app.get(DataSource));
   await recoverOcrFailures(app.get(DataSource));
   app.setGlobalPrefix('api');

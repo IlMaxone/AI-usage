@@ -37,6 +37,8 @@ export class ApiService {
   ocrFailures() { return this.http.get<OcrFailureNotification[]>(`${API_URL}/notifications/ocr-failures`); }
   ocrDebug() { return this.http.get<OcrDebugReport>(`${API_URL}/notifications/ocr-failures/debug`); }
   retryOcrFailures() { return this.http.post<{ queued: number; skipped: number; busy: boolean; issues: Array<{ notificationId: string; code: string; reason: string }> }>(`${API_URL}/notifications/ocr-failures/retry`, {}); }
+  resetOcrFailures() { return this.http.post<{ notifications: number; images: number; records: number; preservedReadings: number }>(`${API_URL}/notifications/ocr-failures/reset`, {}); }
+  saveFailureModelChoice(id: string, modelId: string) { return this.http.patch(`${API_URL}/notifications/ocr-failures/${id}/model-choice`, { modelId }); }
   private readonly http = inject(HttpClient);
   dashboard() { return this.http.get<Dashboard>(`${API_URL}/dashboard`); }
   projects() { return this.http.get<Project[]>(`${API_URL}/projects`); }

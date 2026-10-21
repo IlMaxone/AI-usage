@@ -53,6 +53,9 @@ export class AppComponent implements OnDestroy {
   readonly ocrFailures = signal<OcrFailureNotification[]>([]);
   readonly debugConsoleOpen = signal(false);
   readonly retryOcrBusy = signal(false);
+  readonly resetOcrBusy = signal(false);
+  readonly failureModelDrafts = signal<Partial<Record<string, string>>>({});
+  readonly failureModelSaving = signal<string | null>(null);
   readonly projects = signal<Project[]>([]);
   readonly records = signal<UsageRecord[]>([]);
   readonly models = signal<AiModel[]>([]);
@@ -550,7 +553,7 @@ export class AppComponent implements OnDestroy {
     this.api.ocrFailures().subscribe({ next: (items) => this.ocrFailures.set(items), error: (error: HttpErrorResponse) => { if (error.status === 401) this.logout(); } });
   }
   retryFailedOcr() {
-    if (this.retryOcrBusy()) return;
+    if (this.retryOcrBusy() || this.resetOcrBusy() || this.failureModelSaving()) return;
     this.retryOcrBusy.set(true); this.error.set(''); this.message.set('');
     this.api.retryOcrFailures().subscribe({ next: (result) => {
       this.retryOcrBusy.set(false);
@@ -558,6 +561,29 @@ export class AppComponent implements OnDestroy {
         : `${result.queued} tentativi OCR accodati. ${result.skipped ? `${result.skipped} già in corso. ` : ''}${result.issues.length ? `${result.issues.length} non accodabili: consulta Debug.` : 'Gli alert si chiuderanno dopo la convalida.'}`);
       this.refresh(true);
     }, error: (error: HttpErrorResponse) => { this.retryOcrBusy.set(false); this.error.set('Impossibile riavviare gli OCR. Riprova.'); if (error.status === 401) this.logout(); } });
+  }
+  resetFailedOcr() {
+    if (this.resetOcrBusy() || this.retryOcrBusy() || this.failureModelSaving() || !this.ocrFailures().length) return;
+    if (!window.confirm(`Eliminare definitivamente i tentativi OCR falliti (${this.ocrFailures().length} alert)? Foto problematiche, notifiche e log saranno cancellati. Le ultime letture valide saranno conservate.`)) return;
+    this.resetOcrBusy.set(true); this.clearFeedback();
+    this.api.resetOcrFailures().subscribe({ next: (result) => {
+      this.resetOcrBusy.set(false); this.debugConsoleOpen.set(false);
+      this.releaseAllRecordImages();
+      this.succeed(`Reset completato: ${result.notifications} alert e ${result.images} file eliminati. ${result.preservedReadings} letture valide conservate.`);
+      this.refresh(true);
+    }, error: (error: HttpErrorResponse) => { this.resetOcrBusy.set(false); this.fail(error); } });
+  }
+  setFailureModel(id: string, modelId: string) {
+    this.failureModelDrafts.update((drafts) => ({ ...drafts, [id]: modelId }));
+  }
+  saveFailureModel(notification: OcrFailureNotification) {
+    const modelId = this.failureModelDrafts()[notification.id] ?? notification.modelChoice?.modelId;
+    if (!modelId || this.failureModelSaving() || this.retryOcrBusy() || this.resetOcrBusy()) return;
+    this.failureModelSaving.set(notification.id); this.clearFeedback();
+    this.api.saveFailureModelChoice(notification.id, modelId).subscribe({ next: () => {
+      this.failureModelSaving.set(null); this.refreshOcrFailures();
+      this.succeed('Scelta del modello salvata per entrambe le immagini. Premi Riprova per rieseguire i controlli OCR.');
+    }, error: (error: HttpErrorResponse) => { this.failureModelSaving.set(null); this.fail(error); } });
   }
   private applyDefaults(projects: Project[], models: AiModel[]) {
     const selectedProject = this.recordForm.controls.projectId.value;
